@@ -219,13 +219,24 @@ async function periodReport(id, from, to) {
   let firstFuel = null, lastFuel = null, prevFuel = null;
   const fills = [], drains = [];
   const stops = [];
-  let stopStart = null, stopPt = null;
+  let stopStart = null, stopPt = null, stopOdo = null, curOdo = null;
+
+  // справжня зупинка = швидкість ~0 І одометр НЕ зріс (інакше це рух під РЕБ-глушінням)
+  function closeStop(endTs){
+    if (stopStart == null) return;
+    const dur = endTs - stopStart;
+    const moved = (curOdo != null && stopOdo != null) ? (curOdo - stopOdo) : 0;
+    if (dur >= STOP_MIN && moved < 0.3) stops.push({ ts:stopStart, dur, pt:stopPt });
+    stopStart = null; stopOdo = null;
+  }
 
   for (const m of msgs) {
     const ts = m.timestamp;
     const lat = m['position.latitude'], lon = m['position.longitude'];
     let sp = m['position.speed'];
     if (sp == null) sp = m['can.vehicle.speed'];
+    const od = m['can.vehicle.mileage'];
+    if (od != null) { curOdo = od; if (stopStart != null && stopOdo == null) stopOdo = od; }
 
     // трек + GPS-відстань
     if (lat != null && lon != null) {
@@ -234,16 +245,12 @@ async function periodReport(id, from, to) {
       track.push(pt); prevPt = pt;
     }
 
-    // зупинки (за переходами швидкості)
+    // зупинки (швидкість ~0 І одометр не росте)
     if (sp != null && ts != null) {
       if (sp < STOP_SPEED) {
-        if (stopStart == null) { stopStart = ts; stopPt = (lat!=null && lon!=null) ? [lat,lon] : prevPt; }
+        if (stopStart == null) { stopStart = ts; stopPt = (lat!=null && lon!=null) ? [lat,lon] : prevPt; stopOdo = curOdo; }
       } else {
-        if (stopStart != null) {
-          const dur = ts - stopStart;
-          if (dur >= STOP_MIN) stops.push({ ts:stopStart, dur, pt:stopPt });
-          stopStart = null;
-        }
+        closeStop(ts);
       }
     }
 
@@ -260,8 +267,7 @@ async function periodReport(id, from, to) {
       prevFuel = fl;
     }
   }
-  // зупинка, що триває досі
-  if (stopStart != null) { const dur = to - stopStart; if (dur >= STOP_MIN) stops.push({ ts:stopStart, dur, pt:stopPt }); }
+  closeStop(to); // зупинка, що триває досі
 
   const odoKm = await odoKmP;
   const gpsKm = Math.round(gpsM/1000);
@@ -340,11 +346,13 @@ async function loadPeriod(el) {
   catch(e){ out.innerHTML = '<div class="muted">помилка: '+e.message+'</div>'; return; }
 
   const f = (v,u)=> v!=null ? v.toLocaleString('uk-UA')+' '+u : '—';
+  const jammed = (r.odoKm != null && r.odoKm > 2 && r.gpsKm < r.odoKm*0.5);
   out.innerHTML = `
     <div class="section">
       <h3>Зведення</h3>
-      <div class="row"><span class="k">📏 Пробіг з одометра</span><span class="val">${f(r.odoKm,'км')}</span></div>
-      <div class="row"><span class="k">🛰️ Пробіг по GPS (трек)</span><span class="val">${f(r.gpsKm,'км')}</span></div>
+      <div class="row"><span class="k">📏 Пробіг з одометра</span><span class="val" style="color:var(--accent)">${f(r.odoKm,'км')}</span></div>
+      <div class="row"><span class="k">🛰️ Пробіг по GPS (трек)</span><span class="val">${f(r.gpsKm,'км')}${jammed?' <span style="color:var(--yellow);font-size:11px">⚠ РЕБ</span>':''}</span></div>
+      ${jammed?`<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:4px 0">⚠ GPS глушився (РЕБ) — орієнтуйся на одометр</div>`:''}
       <div class="row"><span class="k">⛽ Залито палива</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
       <div class="row"><span class="k">🔥 Витрачено палива</span><span class="val">${f(r.spentL,'л')}</span></div>
       <div class="row"><span class="k">🔴 Злито палива</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>
