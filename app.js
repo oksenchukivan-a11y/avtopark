@@ -6,6 +6,9 @@ const REFRESH_MS = 30000;          // авто-оновлення кожні 30 
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
 const DRAIN_PCT = 4;               // падіння > 4% при зупинці = підозра на злив
+const STOP_SPEED = 3;              // км/год: нижче — машина стоїть
+const STOP_MIN = 180;              // сек: зупинка від 3 хв
+const JITTER_M = 15;               // ігнор GPS-дрижання менше 15 м
 
 // Ємності баків (літри) по device_id. Додаватимемо машини сюди.
 const TANKS = {
@@ -46,7 +49,7 @@ async function api(path) {
   throw new Error(last || 'api');
 }
 
-function tv(tel, key) { // дістати значення параметра з telemetry
+function tv(tel, key) {
   const x = tel && tel[key];
   if (x == null) return null;
   return (typeof x === 'object' && 'value' in x) ? x.value : x;
@@ -60,6 +63,12 @@ function tts(tel, key) {
 function startOfDay(d = new Date()) { const x = new Date(d); x.setHours(0,0,0,0); return Math.floor(x/1000); }
 function fmtTime(sec){ return new Date(sec*1000).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'}); }
 function fmtDateTime(sec){ return new Date(sec*1000).toLocaleString('uk-UA',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+function fmtDur(sec){
+  sec = Math.round(sec);
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
+  if (h) return h+' год '+m+' хв';
+  return m+' хв';
+}
 function ago(sec){
   const s = Math.floor(Date.now()/1000) - sec;
   if (s < 60) return 'щойно';
@@ -68,9 +77,18 @@ function ago(sec){
   return Math.floor(s/86400)+' дн тому';
 }
 
+// ===== Геометрія =====
+function haversine(a, b){ // [lat,lon] → метри
+  const R = 6371000, rad = Math.PI/180;
+  const dLat=(b[0]-a[0])*rad, dLon=(b[1]-a[1])*rad;
+  const la1=a[0]*rad, la2=b[0]*rad;
+  const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+
 // ===== Паливо у літрах =====
 function fuelLiters(dev, tel) {
-  const direct = tv(tel, 'fuel.liters');      // якщо плагін flespi порахував
+  const direct = tv(tel, 'fuel.liters');
   if (direct != null) return Math.round(direct);
   const pct = tv(tel, 'can.fuel.level');
   const cfg = TANKS[dev.id];
@@ -78,9 +96,8 @@ function fuelLiters(dev, tel) {
   return null;
 }
 
-// ===== Рендер списку + мапа =====
-let map, markers = {};
-let devCache = [];
+// ===== Список + головна мапа =====
+let map, layersCtl, markers = {}, devCache = [];
 
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry');
@@ -96,13 +113,12 @@ function statusOnline(tel) {
   return (Date.now()/1000 - ts) < ONLINE_SEC;
 }
 
-async function renderCards(devs) {
+function renderCards(devs) {
   const list = document.getElementById('list');
   list.innerHTML = '';
   for (const d of devs) {
     const tel = d.telemetry || {};
     const liters = fuelLiters(d, tel);
-    const cfg = TANKS[d.id];
     const odo = tv(tel, 'can.vehicle.mileage');
     const spd = tv(tel, 'position.speed');
     const online = statusOnline(tel);
@@ -111,7 +127,7 @@ async function renderCards(devs) {
     const fuelTxt = liters != null ? liters + ' л'
                    : (tv(tel,'can.fuel.level') != null ? tv(tel,'can.fuel.level')+' %' : '—');
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
-    const spdTxt = spd != null ? Math.round(spd) + ' км/г' : (online ? 'стоїть' : '—');
+    const spdTxt = spd != null && spd >= 3 ? Math.round(spd) + ' км/г' : (online ? 'стоїть' : '—');
 
     const card = document.createElement('div');
     card.className = 'card';
@@ -129,7 +145,6 @@ async function renderCards(devs) {
       </div>`;
     list.appendChild(card);
 
-    // пробіг за сьогодні (з одометра) — асинхронно
     dayMileage(d.id, startOfDay()).then(km => {
       const el = document.getElementById('dm_' + d.id);
       if (el) el.textContent = (km != null ? km + ' км' : '—');
@@ -137,10 +152,21 @@ async function renderCards(devs) {
   }
 }
 
+// шари карти (безкоштовні, без ключа)
+function baseLayers(){
+  return {
+    'Схема': L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom:20, subdomains:'abcd' }),
+    'Супутник': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom:19 }),
+    'OSM': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }),
+  };
+}
+
 function renderMap(devs) {
   if (!map) {
     map = L.map('map', { zoomControl:true, attributionControl:false }).setView([50.9,34.8], 9);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+    const bl = baseLayers();
+    bl['Схема'].addTo(map);
+    layersCtl = L.control.layers(bl, {}, { position:'topright' }).addTo(map);
   }
   const pts = [];
   for (const d of devs) {
@@ -160,10 +186,8 @@ function renderMap(devs) {
   if (pts.length && !map._fitted) { map.fitBounds(pts, { padding:[40,40], maxZoom:13 }); map._fitted = true; }
 }
 
-// ===== Пробіг з ОДОМЕТРА (не GPS) =====
-// Перше і останнє показання can.vehicle.mileage у вікні → різниця.
+// ===== Пробіг з ОДОМЕТРА (точно, дешево) =====
 async function odoAt(id, from, to, reverse) {
-  // filter — flespi поверне лише повідомлення, де є одометр (точно і легко)
   const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:!!reverse, filter:'can.vehicle.mileage' }));
   const res = await api(`/gw/devices/${id}/messages?data=${data}`);
   if (!res || !res.length) return null;
@@ -178,34 +202,88 @@ async function dayMileage(id, from, to) {
   return km >= 0 ? km : null;
 }
 
-// ===== Заправки / зливи (останні 48 год) =====
-async function fuelEvents(id) {
-  const now = Math.floor(Date.now()/1000), from = now - 48*3600;
-  // filter — лише повідомлення з рівнем палива (легко й швидко)
-  const data = encodeURIComponent(JSON.stringify({ from, to:now, count:8000, filter:'can.fuel.level' }));
-  let msgs;
-  try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`); } catch(e){ return null; }
-  if (!msgs) return null;
-  const cfg = TANKS[id]; const tank = cfg && cfg.tank;
+// ===== ЗВЕДЕННЯ ЗА ПЕРІОД (все одним проходом по повідомленнях) =====
+async function periodReport(id, from, to) {
+  // 1) одометр — точно і дешево
+  const odoKmP = dayMileage(id, from, to);
+
+  // 2) усі повідомлення періоду
+  const data = encodeURIComponent(JSON.stringify({ from, to, count:40000 }));
+  let msgs = [];
+  try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e) { msgs = []; }
+  msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
+
+  const tank = (TANKS[id]||{}).tank || null;
+  const track = [];
+  let gpsM = 0, prevPt = null;
+  let firstFuel = null, lastFuel = null, prevFuel = null;
   const fills = [], drains = [];
-  let prev = null;
+  const stops = [];
+  let stopStart = null, stopPt = null;
+
   for (const m of msgs) {
-    const fl = m['can.fuel.level']; if (fl == null) continue;
-    const sp = m['position.speed'] != null ? m['position.speed'] : m['can.vehicle.speed'];
-    const ts = m['timestamp'];
-    if (prev != null) {
-      const d = fl - prev;
-      if (d >= FILL_PCT && tank) fills.push({ ts, l: Math.round(d/100*tank) });
-      else if (-d >= DRAIN_PCT && (sp == null || sp < 2) && tank) drains.push({ ts, l: Math.round(-d/100*tank) });
+    const ts = m.timestamp;
+    const lat = m['position.latitude'], lon = m['position.longitude'];
+    let sp = m['position.speed'];
+    if (sp == null) sp = m['can.vehicle.speed'];
+
+    // трек + GPS-відстань
+    if (lat != null && lon != null) {
+      const pt = [lat, lon];
+      if (prevPt) { const dm = haversine(prevPt, pt); if (dm > JITTER_M) gpsM += dm; }
+      track.push(pt); prevPt = pt;
     }
-    prev = fl;
+
+    // зупинки (за переходами швидкості)
+    if (sp != null && ts != null) {
+      if (sp < STOP_SPEED) {
+        if (stopStart == null) { stopStart = ts; stopPt = (lat!=null && lon!=null) ? [lat,lon] : prevPt; }
+      } else {
+        if (stopStart != null) {
+          const dur = ts - stopStart;
+          if (dur >= STOP_MIN) stops.push({ ts:stopStart, dur, pt:stopPt });
+          stopStart = null;
+        }
+      }
+    }
+
+    // паливо
+    const fl = m['can.fuel.level'];
+    if (fl != null) {
+      if (firstFuel == null) firstFuel = fl;
+      lastFuel = fl;
+      if (prevFuel != null) {
+        const d = fl - prevFuel;
+        if (d >= FILL_PCT && tank) fills.push({ ts, l: d/100*tank });
+        else if (-d >= DRAIN_PCT && (sp==null || sp<3) && tank) drains.push({ ts, l: -d/100*tank });
+      }
+      prevFuel = fl;
+    }
   }
-  return { fills, drains };
+  // зупинка, що триває досі
+  if (stopStart != null) { const dur = to - stopStart; if (dur >= STOP_MIN) stops.push({ ts:stopStart, dur, pt:stopPt }); }
+
+  const odoKm = await odoKmP;
+  const gpsKm = Math.round(gpsM/1000);
+  let filledL = null, drainedL = null, spentL = null;
+  if (tank) {
+    filledL = Math.round(fills.reduce((s,f)=>s+f.l,0));
+    drainedL = Math.round(drains.reduce((s,f)=>s+f.l,0));
+    if (firstFuel != null && lastFuel != null) {
+      const balance = (firstFuel - lastFuel)/100*tank + filledL - drainedL;
+      spentL = Math.max(0, Math.round(balance));
+    }
+  }
+  return { odoKm, gpsKm, filledL, spentL, drainedL,
+           fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l)})),
+           drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l)})),
+           track, stops };
 }
 
 // ===== Деталі машини =====
-let curDetail = null;
-async function openDetail(d) {
+let curDetail = null, dMap = null, dLayers = {};
+
+function openDetail(d) {
   curDetail = d;
   document.getElementById('dName').textContent = d.name;
   document.getElementById('detail').classList.add('show');
@@ -215,62 +293,123 @@ async function openDetail(d) {
   const range = tv(tel,'can.vehicle.remaining.range');
   const cfg = TANKS[d.id];
 
-  const b = document.getElementById('dBody');
-  b.innerHTML = `
+  document.getElementById('dBody').innerHTML = `
     <div class="section">
       <h3>Зараз</h3>
-      <div style="display:flex; gap:20px; align-items:baseline">
-        <div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':(tv(tel,'can.fuel.level')!=null?tv(tel,'can.fuel.level')+' %':'—')}</div><div class="l" style="color:var(--dim);font-size:12px">паливо в баку${cfg?` (бак ${cfg.tank} л)`:''}</div></div>
+      <div style="display:flex; gap:24px; align-items:baseline">
+        <div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':(tv(tel,'can.fuel.level')!=null?tv(tel,'can.fuel.level')+' %':'—')}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${cfg?` (бак ${cfg.tank} л)`:''}</div></div>
         ${range!=null?`<div><div class="big">${Math.round(range)}</div><div class="l" style="color:var(--dim);font-size:12px">запас ходу, км</div></div>`:''}
+        <div><div class="big">${odo!=null?Math.round(odo).toLocaleString('uk-UA'):'—'}</div><div class="l" style="color:var(--dim);font-size:12px">одометр, км</div></div>
       </div>
-      <div class="row" style="margin-top:10px"><span class="k">Одометр</span><span class="val">${odo!=null?Math.round(odo).toLocaleString('uk-UA')+' км':'—'}</span></div>
     </div>
 
-    <div class="section">
-      <h3>Пробіг (з одометра)</h3>
-      <div class="tabs">
-        <div class="tab active" onclick="mileTab(this,'today')">Сьогодні</div>
-        <div class="tab" onclick="mileTab(this,'yest')">Вчора</div>
-        <div class="tab" onclick="mileTab(this,'month')">Місяць</div>
-      </div>
-      <div id="mileOut" class="spinner">…</div>
+    <div class="tabs">
+      <div class="tab active" data-p="today" onclick="loadPeriod(this)">Сьогодні</div>
+      <div class="tab" data-p="yest" onclick="loadPeriod(this)">Вчора</div>
+      <div class="tab" data-p="week" onclick="loadPeriod(this)">Тиждень</div>
+      <div class="tab" data-p="month" onclick="loadPeriod(this)">Місяць</div>
     </div>
 
-    <div class="section">
-      <h3>Паливо — заправки і зливи (48 год)</h3>
-      <div id="fuelOut" class="spinner">…</div>
-    </div>`;
+    <div id="periodOut"><div class="spinner">…</div></div>`;
 
-  mileTab(document.querySelector('#detail .tab'), 'today');
-
-  // паливні події
-  const fe = await fuelEvents(d.id);
-  const out = document.getElementById('fuelOut');
-  if (!fe) { out.innerHTML = '<div class="muted">немає даних</div>'; return; }
-  let html = '';
-  fe.fills.forEach(f => html += `<div class="ev"><span class="amt up">🟢 +${f.l} л</span><span class="when">${fmtDateTime(f.ts)}</span></div>`);
-  fe.drains.forEach(f => html += `<div class="ev"><span class="amt down">🔴 −${f.l} л злив?</span><span class="when">${fmtDateTime(f.ts)}</span></div>`);
-  out.innerHTML = html || '<div class="muted">за 48 год заправок і зливів не виявлено</div>';
+  // деталеву мапу перестворюємо
+  if (dMap) { dMap.remove(); dMap = null; }
+  loadPeriod(document.querySelector('#detail .tab.active'));
 }
 
-async function mileTab(el, period) {
-  document.querySelectorAll('#detail .tab').forEach(t => t.classList.remove('active'));
-  el.classList.add('active');
-  const out = document.getElementById('mileOut');
-  out.className = 'spinner'; out.textContent = '…';
+function periodRange(p){
   const now = Math.floor(Date.now()/1000);
-  let from, to;
-  if (period === 'today') { from = startOfDay(); to = now; }
-  else if (period === 'yest') { to = startOfDay(); from = to - 86400; }
-  else { const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); from = Math.floor(d/1000); to = now; }
-  try {
-    const km = await dayMileage(curDetail.id, from, to);
-    out.className = '';
-    out.innerHTML = `<div class="big">${km!=null?km.toLocaleString('uk-UA')+' км':'—'}</div>`;
-  } catch(e) { out.className=''; out.innerHTML = '<div class="muted">—</div>'; }
+  if (p === 'today') return [startOfDay(), now];
+  if (p === 'yest') { const t = startOfDay(); return [t-86400, t]; }
+  if (p === 'week') return [now - 7*86400, now];
+  const d = new Date(); d.setDate(1); d.setHours(0,0,0,0);
+  return [Math.floor(d/1000), now];
 }
 
-function closeDetail(){ document.getElementById('detail').classList.remove('show'); curDetail=null; }
+async function loadPeriod(el) {
+  document.querySelectorAll('#detail .tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  const p = el.dataset.p;
+  const [from, to] = periodRange(p);
+  const out = document.getElementById('periodOut');
+  out.innerHTML = '<div class="spinner">рахую…</div>';
+  if (dMap) { dMap.remove(); dMap = null; }
+
+  let r;
+  try { r = await periodReport(curDetail.id, from, to); }
+  catch(e){ out.innerHTML = '<div class="muted">помилка: '+e.message+'</div>'; return; }
+
+  const f = (v,u)=> v!=null ? v.toLocaleString('uk-UA')+' '+u : '—';
+  out.innerHTML = `
+    <div class="section">
+      <h3>Зведення</h3>
+      <div class="row"><span class="k">📏 Пробіг з одометра</span><span class="val">${f(r.odoKm,'км')}</span></div>
+      <div class="row"><span class="k">🛰️ Пробіг по GPS (трек)</span><span class="val">${f(r.gpsKm,'км')}</span></div>
+      <div class="row"><span class="k">⛽ Залито палива</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
+      <div class="row"><span class="k">🔥 Витрачено палива</span><span class="val">${f(r.spentL,'л')}</span></div>
+      <div class="row"><span class="k">🔴 Злито палива</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>
+    </div>
+
+    <div class="section">
+      <h3>Трек і зупинки (≥3 хв)</h3>
+      <div id="dMap" class="dmap"></div>
+      <div id="stopsOut" style="margin-top:10px"></div>
+    </div>
+
+    ${(r.fills.length||r.drains.length) ? `<div class="section"><h3>Події палива</h3><div id="evOut"></div></div>` : ''}`;
+
+  // мапа треку
+  drawTrack(r.track, r.stops);
+
+  // список зупинок
+  const so = document.getElementById('stopsOut');
+  if (r.stops.length) {
+    so.innerHTML = r.stops.map((s,i)=>`<div class="ev"><span><b>№${i+1}</b> &nbsp;${fmtDur(s.dur)}</span><span class="when">${fmtDateTime(s.ts)}</span></div>`).join('');
+  } else {
+    so.innerHTML = '<div class="muted">зупинок ≥3 хв не знайдено</div>';
+  }
+
+  // події палива
+  const ev = document.getElementById('evOut');
+  if (ev) {
+    let h='';
+    r.fills.forEach(x=> h+=`<div class="ev"><span class="amt up">🟢 +${x.l} л</span><span class="when">${fmtDateTime(x.ts)}</span></div>`);
+    r.drains.forEach(x=> h+=`<div class="ev"><span class="amt down">🔴 −${x.l} л злив?</span><span class="when">${fmtDateTime(x.ts)}</span></div>`);
+    ev.innerHTML = h;
+  }
+}
+
+function drawTrack(track, stops) {
+  const el = document.getElementById('dMap');
+  if (!el) return;
+  dMap = L.map(el, { zoomControl:true, attributionControl:false });
+  const bl = baseLayers();
+  bl['Схема'].addTo(dMap);
+  L.control.layers(bl, {}, { position:'topright' }).addTo(dMap);
+
+  if (!track.length) {
+    dMap.setView([50.9,34.8], 9);
+    el.insertAdjacentHTML('afterend','<div class="muted" style="margin-top:8px">за період треку немає</div>');
+    return;
+  }
+  const line = L.polyline(track, { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(dMap);
+  // старт / фініш
+  L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(dMap).bindPopup('Старт');
+  L.circleMarker(track[track.length-1], { radius:6, color:'#e74c3c', fillColor:'#e74c3c', fillOpacity:1 }).addTo(dMap).bindPopup('Кінець');
+  // зупинки — пронумеровані
+  stops.forEach((s,i)=>{
+    if (!s.pt) return;
+    const icon = L.divIcon({ className:'', html:`<div style="background:#f1c40f;color:#000;border:2px solid #fff;border-radius:50%;width:24px;height:24px;line-height:20px;text-align:center;font-weight:700;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.5)">${i+1}</div>`, iconSize:[24,24], iconAnchor:[12,12] });
+    L.marker(s.pt, { icon }).addTo(dMap).bindPopup(`Зупинка №${i+1}<br>${fmtDur(s.dur)}<br>${fmtDateTime(s.ts)}`);
+  });
+  setTimeout(()=>{ dMap.invalidateSize(); dMap.fitBounds(line.getBounds(), { padding:[30,30] }); }, 100);
+}
+
+function closeDetail(){
+  document.getElementById('detail').classList.remove('show');
+  curDetail = null;
+  if (dMap) { dMap.remove(); dMap = null; }
+}
 
 // ===== Оновлення =====
 let timer;
@@ -294,7 +433,6 @@ function init() {
   startLoop();
 }
 
-// service worker (для встановлення як додаток)
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(()=>{});
 }
