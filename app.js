@@ -6,6 +6,8 @@ const REFRESH_MS = 30000;          // авто-оновлення кожні 30 
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
 const DRAIN_PCT = 4;               // падіння > 4% при зупинці = підозра на злив
+const FILL_L = 5;                  // або стрибок > 5 л = заправка (для авто, що дають літри)
+const DRAIN_L = 4;                 // падіння > 4 л при зупинці = злив
 const STOP_SPEED = 3;              // км/год: нижче — машина стоїть
 const STOP_MIN = 180;              // сек: зупинка від 3 хв
 const JITTER_M = 15;               // ігнор GPS-дрижання менше 15 м
@@ -101,7 +103,9 @@ function tankFor(x) {
 function fuelLiters(dev, tel) {
   const direct = tv(tel, 'fuel.liters');
   if (direct != null) return Math.round(direct);
-  const pct = tv(tel, 'can.fuel.level');
+  const vol = tv(tel, 'can.fuel.volume');     // деякі авто (Master) дають літри напряму
+  if (vol != null && vol > 0) return Math.round(vol);
+  const pct = tv(tel, 'can.fuel.level');       // інші (Audi) — відсоток × бак
   const tank = tankFor(dev);
   if (pct != null && tank) return Math.round(pct / 100 * tank);
   return null;
@@ -294,17 +298,18 @@ async function periodReport(id, from, to) {
       }
     }
 
-    // паливо
-    const fl = m['can.fuel.level'];
-    if (fl != null) {
-      if (firstFuel == null) firstFuel = fl;
-      lastFuel = fl;
+    // паливо в літрах: з can.fuel.volume напряму (Master), або can.fuel.level% × бак (Audi)
+    let flv = m['can.fuel.volume'];
+    if ((flv == null || flv <= 0) && m['can.fuel.level'] != null && tank) flv = m['can.fuel.level']/100*tank;
+    if (flv != null && flv > 0) {
+      if (firstFuel == null) firstFuel = flv;
+      lastFuel = flv;
       if (prevFuel != null) {
-        const d = fl - prevFuel;
-        if (d >= FILL_PCT && tank) fills.push({ ts, l: d/100*tank });
-        else if (-d >= DRAIN_PCT && (sp==null || sp<3) && tank) drains.push({ ts, l: -d/100*tank });
+        const d = flv - prevFuel;
+        if (d >= FILL_L) fills.push({ ts, l: d });
+        else if (-d >= DRAIN_L && (sp==null || sp<3)) drains.push({ ts, l: -d });
       }
-      prevFuel = fl;
+      prevFuel = flv;
     }
   }
   closeStop(to); // зупинка, що триває досі
@@ -312,13 +317,10 @@ async function periodReport(id, from, to) {
   const odoKm = await odoKmP;
   const gpsKm = Math.round(gpsM/1000);
   let filledL = null, drainedL = null, spentL = null;
-  if (tank) {
+  if (firstFuel != null && lastFuel != null) {   // firstFuel/lastFuel уже в літрах
     filledL = Math.round(fills.reduce((s,f)=>s+f.l,0));
     drainedL = Math.round(drains.reduce((s,f)=>s+f.l,0));
-    if (firstFuel != null && lastFuel != null) {
-      const balance = (firstFuel - lastFuel)/100*tank + filledL - drainedL;
-      spentL = Math.max(0, Math.round(balance));
-    }
+    spentL = Math.max(0, Math.round((firstFuel - lastFuel) + filledL - drainedL));
   }
   return { odoKm, gpsKm, filledL, spentL, drainedL,
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l)})),
