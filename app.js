@@ -259,7 +259,7 @@ async function periodReport(id, from, to) {
 
   const tank = tankFor(id);
   const track = [];
-  let gpsM = 0, prevPt = null;
+  let gpsM = 0, prevPt = null, prevTs = null;
   let firstFuel = null, lastFuel = null, prevFuel = null;
   const fills = [], drains = [];
   const stops = [];
@@ -282,11 +282,24 @@ async function periodReport(id, from, to) {
     const od = m['can.vehicle.mileage'];
     if (od != null) { curOdo = od; if (stopStart != null && stopOdo == null) stopOdo = od; }
 
-    // трек + GPS-відстань
-    if (lat != null && lon != null) {
+    // валідність GPS-фіксу — відсікаємо «стрибки» (дефолтна/застаріла позиція без супутників)
+    const valid = m['position.valid'];
+    const sats = m['position.satellites'];
+    let goodFix;
+    if (valid !== undefined && valid !== null) goodFix = (valid === true);
+    else if (sats !== undefined && sats !== null) goodFix = (sats >= 3);
+    else goodFix = true;
+
+    // трек + GPS-відстань (тільки валідні точки, без телепортів)
+    if (lat != null && lon != null && goodFix) {
       const pt = [lat, lon];
-      if (prevPt) { const dm = haversine(prevPt, pt); if (dm > JITTER_M) gpsM += dm; }
-      track.push(pt); prevPt = pt;
+      if (prevPt) {
+        const dm = haversine(prevPt, pt);
+        const dt = (prevTs != null) ? (ts - prevTs) : 0;
+        const kmh = (dt > 0) ? (dm / dt * 3.6) : 0;
+        if (dm > JITTER_M && kmh < 200) gpsM += dm;   // реальний рух; телепорти й дрижання — мимо
+      }
+      track.push(pt); prevPt = pt; prevTs = ts;
     }
 
     // зупинки (швидкість ~0 І одометр не росте)
