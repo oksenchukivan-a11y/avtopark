@@ -1,7 +1,7 @@
 // Service worker — застосунок ставиться як додаток і працює офлайн.
 // Стратегія: код (html/js) — мережа-перша (оновлення видно одразу), статика — кеш-перша.
 // API flespi НЕ кешуємо — дані завжди свіжі.
-const CACHE = 'avtopark-v3';
+const CACHE = 'avtopark-v4';
 const SHELL = [
   './',
   './index.html',
@@ -33,7 +33,7 @@ self.addEventListener('fetch', e => {
     return;
   }
   // тайли карт — мережа, без кешу
-  if (url.includes('tile') || url.includes('arcgisonline') || url.includes('basemaps.cartocdn')) {
+  if (url.includes('tile') || url.includes('google.com/vt') || url.includes('arcgisonline') || url.includes('basemaps.cartocdn')) {
     e.respondWith(fetch(e.request).catch(() => new Response('', { status: 503 })));
     return;
   }

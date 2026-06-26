@@ -152,11 +152,14 @@ function renderCards(devs) {
   }
 }
 
-// шари карти (безкоштовні, без ключа)
+// шари карти — Google (дорожня/супутник/гібрид), з укр. підписами
 function baseLayers(){
+  const g = (lyrs)=> L.tileLayer('https://mt{s}.google.com/vt/lyrs='+lyrs+'&hl=uk&x={x}&y={y}&z={z}',
+                     { subdomains:['0','1','2','3'], maxZoom:21, attribution:'' });
   return {
-    'Схема': L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom:20, subdomains:'abcd' }),
-    'Супутник': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom:19 }),
+    'Карта': g('m'),      // Google дорожня
+    'Супутник': g('s'),   // Google супутник
+    'Гібрид': g('y'),     // супутник + підписи
     'OSM': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }),
   };
 }
@@ -165,7 +168,7 @@ function renderMap(devs) {
   if (!map) {
     map = L.map('map', { zoomControl:true, attributionControl:false }).setView([50.9,34.8], 9);
     const bl = baseLayers();
-    bl['Схема'].addTo(map);
+    bl['Карта'].addTo(map);
     layersCtl = L.control.layers(bl, {}, { position:'topright' }).addTo(map);
   }
   const pts = [];
@@ -392,7 +395,7 @@ function drawTrack(track, stops) {
   if (!el) return;
   dMap = L.map(el, { zoomControl:true, attributionControl:false });
   const bl = baseLayers();
-  bl['Схема'].addTo(dMap);
+  bl['Карта'].addTo(dMap);
   L.control.layers(bl, {}, { position:'topright' }).addTo(dMap);
 
   if (!track.length) {
