@@ -30,11 +30,13 @@ function logout() {
 }
 
 // ===== API (з ретраями — flespi інколи віддає порожнє) =====
-async function api(path) {
+async function api(path, method, body) {
   let last;
   for (let i = 0; i < 3; i++) {
     try {
-      const r = await fetch(FLESPI + path, { headers: { Authorization: 'FlespiToken ' + token() } });
+      const opt = { method: method || 'GET', headers: { Authorization: 'FlespiToken ' + token() } };
+      if (body != null) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+      const r = await fetch(FLESPI + path, opt);
       if (r.status === 401 || r.status === 403) throw new Error('AUTH');
       const txt = await r.text();
       if (!txt) { last = 'empty'; continue; }
@@ -103,6 +105,31 @@ function fuelLiters(dev, tel) {
   const tank = tankFor(dev);
   if (pct != null && tank) return Math.round(pct / 100 * tank);
   return null;
+}
+
+// ===== Перезавантаження трекера (для зависань) =====
+async function rebootTracker(id) {
+  const dev = devCache.find(d => d.id === id);
+  const name = dev ? dev.name : '';
+  if (!confirm('Надіслати трекеру «' + name + '» команду перезавантаження?\n\nКорисно коли трекер завис. Виконається одразу (якщо на зв\'язку) або щойно відновить зв\'язок.')) return;
+  try {
+    await api('/gw/devices/' + id + '/commands-queue', 'POST', [{ name:'custom', properties:{ text:'cpureset' } }]);
+    alert('✅ Команду надіслано.\nТрекер перезавантажиться, щойно її отримає.');
+  } catch (e) { alert('Помилка: ' + e.message); }
+}
+
+// ===== Іконка машини на карті (з метаданих) =====
+function markerFor(dev, latlon, online) {
+  const m = dev.metadata || {};
+  const color = m.color || '#3aa0ff';
+  const icon = m.icon || '🚗';
+  const short = m.short || dev.name || '';
+  const dim = online ? 1 : 0.55;
+  const html = '<div style="opacity:'+dim+';background:'+color+';border:2px solid #fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:0 2px 7px rgba(0,0,0,.5)">'+icon+'</div>';
+  const di = L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
+  const mk = L.marker(latlon, { icon: di });
+  mk.bindTooltip(short, { permanent:true, direction:'right', offset:[16,0], className:'veh-label' });
+  return mk;
 }
 
 // ===== Список + головна мапа =====
@@ -188,11 +215,12 @@ function renderMap(devs) {
     const online = statusOnline(tel);
     const liters = fuelLiters(d, tel);
     pts.push([lat,lon]);
-    const html = `<b>${d.name}</b><br>${liters!=null?liters+' л':''} ${online?'🟢':'⚪'}`;
+    const html = `<b>${d.name}</b><br>${liters!=null?liters+' л':''} ${online?'🟢 онлайн':'⚪ офлайн'}`;
     if (markers[d.id]) {
-      markers[d.id].setLatLng([lat,lon]).getPopup().setContent(html);
+      markers[d.id].setLatLng([lat,lon]);
+      const pp = markers[d.id].getPopup(); if (pp) pp.setContent(html);
     } else {
-      markers[d.id] = L.marker([lat,lon]).addTo(map).bindPopup(html);
+      markers[d.id] = markerFor(d, [lat,lon], online).addTo(map).bindPopup(html);
     }
   }
   if (pts.length && !map._fitted) { map.fitBounds(pts, { padding:[40,40], maxZoom:13 }); map._fitted = true; }
@@ -319,6 +347,7 @@ function openDetail(d) {
         ${range!=null?`<div><div class="big">${Math.round(range)}</div><div class="l" style="color:var(--dim);font-size:12px">запас ходу, км</div></div>`:''}
         <div><div class="big">${odo!=null?Math.round(odo).toLocaleString('uk-UA'):'—'}</div><div class="l" style="color:var(--dim);font-size:12px">одометр, км</div></div>
       </div>
+      <button class="reboot" onclick="rebootTracker(${d.id})">🔄 Перезавантажити трекер</button>
     </div>
 
     <div class="tabs">
