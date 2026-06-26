@@ -86,13 +86,22 @@ function haversine(a, b){ // [lat,lon] → метри
   return 2*R*Math.asin(Math.sqrt(h));
 }
 
+// ===== Бак: з метаданих flespi (device.metadata.tank), запасний — TANKS =====
+function tankFor(x) {
+  const id = (x && typeof x === 'object') ? x.id : x;
+  const dev = (x && typeof x === 'object') ? x : devCache.find(d => d.id === id);
+  if (dev && dev.metadata && dev.metadata.tank) return dev.metadata.tank;
+  if (TANKS[id] && TANKS[id].tank) return TANKS[id].tank;
+  return null;
+}
+
 // ===== Паливо у літрах =====
 function fuelLiters(dev, tel) {
   const direct = tv(tel, 'fuel.liters');
   if (direct != null) return Math.round(direct);
   const pct = tv(tel, 'can.fuel.level');
-  const cfg = TANKS[dev.id];
-  if (pct != null && cfg && cfg.tank) return Math.round(pct / 100 * cfg.tank);
+  const tank = tankFor(dev);
+  if (pct != null && tank) return Math.round(pct / 100 * tank);
   return null;
 }
 
@@ -100,7 +109,7 @@ function fuelLiters(dev, tel) {
 let map, layersCtl, markers = {}, devCache = [];
 
 async function loadDevices() {
-  const devs = await api('/gw/devices/all?fields=id,name,telemetry');
+  const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
   devCache = devs;
   renderCards(devs);
   renderMap(devs);
@@ -216,7 +225,7 @@ async function periodReport(id, from, to) {
   try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e) { msgs = []; }
   msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
 
-  const tank = (TANKS[id]||{}).tank || null;
+  const tank = tankFor(id);
   const track = [];
   let gpsM = 0, prevPt = null;
   let firstFuel = null, lastFuel = null, prevFuel = null;
@@ -300,13 +309,13 @@ function openDetail(d) {
   const liters = fuelLiters(d, tel);
   const odo = tv(tel,'can.vehicle.mileage');
   const range = tv(tel,'can.vehicle.remaining.range');
-  const cfg = TANKS[d.id];
+  const tank = tankFor(d);
 
   document.getElementById('dBody').innerHTML = `
     <div class="section">
       <h3>Зараз</h3>
       <div style="display:flex; gap:24px; align-items:baseline">
-        <div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':(tv(tel,'can.fuel.level')!=null?tv(tel,'can.fuel.level')+' %':'—')}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${cfg?` (бак ${cfg.tank} л)`:''}</div></div>
+        <div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':(tv(tel,'can.fuel.level')!=null?tv(tel,'can.fuel.level')+' %':'—')}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${tank?` (бак ${tank} л)`:''}</div></div>
         ${range!=null?`<div><div class="big">${Math.round(range)}</div><div class="l" style="color:var(--dim);font-size:12px">запас ходу, км</div></div>`:''}
         <div><div class="big">${odo!=null?Math.round(odo).toLocaleString('uk-UA'):'—'}</div><div class="l" style="color:var(--dim);font-size:12px">одометр, км</div></div>
       </div>
