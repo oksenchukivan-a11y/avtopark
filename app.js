@@ -186,11 +186,10 @@ function statusOnline(tel) {
   if (!ts) return false;
   return (Date.now()/1000 - ts) < ONLINE_SEC;
 }
-// авто ЗАДІЯНЕ = свіжі дані + двигун заведений (запалювання) АБО їде / рухається
+// авто ЗАДІЯНЕ = свіжі дані + ДВИГУН ЗАВЕДЕНИЙ (запалювання).
+// Рух/швидкість НЕ враховуємо: РЕБ може створити фейковий рух і телепорт у чужу локацію.
 function isActive(tel, online) {
-  const ign = tv(tel,'engine.ignition.status');
-  const spd = tv(tel,'position.speed');
-  return !!online && ((ign === true) || (spd != null && spd >= 3) || (tv(tel,'movement.status') === true));
+  return !!online && (tv(tel,'engine.ignition.status') === true);
 }
 
 function renderCards(devs) {
@@ -253,9 +252,9 @@ function renderCards(devs) {
     }).catch(()=>{ const el=document.getElementById('dm_'+d.id); if(el) el.textContent='—'; });
 
     if (!active && online) {
-      standingDuration(d.id).then(sec => {
+      standingText(d.id).then(txt => {
         const el = document.getElementById('st_' + d.id);
-        if (el) el.textContent = (sec != null) ? fmtStanding(sec) : '—';
+        if (el) el.textContent = txt;
       }).catch(()=>{ const el=document.getElementById('st_'+d.id); if(el) el.textContent='—'; });
     }
   }
@@ -339,28 +338,36 @@ function fmtStanding(sec){
   if (h > 0) return `${h} год ${m} хв`;
   return `${m} хв`;
 }
-async function lastActiveTs(id){
+async function lastActiveInfo(id){
   const now = Math.floor(Date.now()/1000);
+  // активність = ЗАПУСК ДВИГУНА (запалювання). Рух не рахуємо — РЕБ може підробити швидкість/телепорт.
   // тир 1 — недавні повідомлення (для щоденних авто знайде швидко й дешево); тир 2 — глибше, якщо стоїть давно
   for (const pair of [[300,3],[12000,60]]) {
     const cnt = pair[0], days = pair[1];
-    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,engine.ignition.status,position.speed' }));
+    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,engine.ignition.status' }));
     let msgs;
     try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e){ return null; }
     for (const m of msgs) {
-      if (m['engine.ignition.status'] === true || (m['position.speed'] != null && m['position.speed'] >= 3)) return m.timestamp;
+      if (m['engine.ignition.status'] === true) return { ts: m.timestamp, found: true };   // знайшли реальний запуск
     }
-    if (cnt > 1000 && msgs.length) return msgs[msgs.length-1].timestamp;   // активності у вікні нема → «принаймні стільки»
+    if (cnt > 1000 && msgs.length) return { ts: msgs[msgs.length-1].timestamp, found: false };  // запуску у вікні нема → «принаймні стільки»
   }
   return null;
 }
-async function standingDuration(id){
+// повертає готовий текст: «2 год 15 хв» або «≥ 1 год» (коли немає давнішої історії)
+async function standingText(id){
   const now = Math.floor(Date.now()/1000);
+  let ts, atLeast;
   const c = standingCache[id];
-  if (c && c.ts != null && (Date.now()-c.at) < 1800000) return now - c.ts;   // кеш 30 хв (момент простою фіксований)
-  const ts = await lastActiveTs(id);
-  standingCache[id] = { ts, at: Date.now() };
-  return (ts != null) ? (now - ts) : null;
+  if (c && (Date.now()-c.at) < 1800000) { ts = c.ts; atLeast = c.atLeast; }   // кеш 30 хв (момент простою фіксований)
+  else {
+    const info = await lastActiveInfo(id);
+    ts = info ? info.ts : null;
+    atLeast = info ? !info.found : false;
+    standingCache[id] = { ts, at: Date.now(), atLeast };
+  }
+  if (ts == null) return '—';
+  return (atLeast ? '≥ ' : '') + fmtStanding(now - ts);
 }
 
 // ===== ЗВЕДЕННЯ ЗА ПЕРІОД (все одним проходом по повідомленнях) =====
@@ -514,7 +521,7 @@ function openDetail(d) {
   if (dstEl) {
     if (dActive) dstEl.textContent = 'в роботі';
     else if (!dOnline) dstEl.textContent = '—';
-    else standingDuration(d.id).then(s => { if (dstEl) dstEl.textContent = (s!=null?fmtStanding(s):'—'); }).catch(()=>{ if (dstEl) dstEl.textContent='—'; });
+    else standingText(d.id).then(txt => { if (dstEl) dstEl.textContent = txt; }).catch(()=>{ if (dstEl) dstEl.textContent='—'; });
   }
 
   // деталеву мапу перестворюємо
