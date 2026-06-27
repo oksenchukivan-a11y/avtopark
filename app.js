@@ -231,16 +231,27 @@ function renderMap(devs) {
 }
 
 // ===== Пробіг з ОДОМЕТРА (точно, дешево) =====
-async function odoAt(id, from, to, reverse) {
-  const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:!!reverse, filter:'can.vehicle.mileage' }));
+// Пріоритет: OBD-одометр авто (can.vehicle.mileage — стійкий до РЕБ).
+// Запасний: GNSS-одометр трекера (vehicle.mileage) — для авто БЕЗ OBD-одометра (Ducato 2008, частина електричок).
+async function mileageField(id, from, to) {
+  for (const field of ['can.vehicle.mileage', 'vehicle.mileage']) {
+    const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:true, filter:field }));
+    const res = await api(`/gw/devices/${id}/messages?data=${data}`);
+    if (res && res.length && res[0][field] != null) return field;
+  }
+  return null;
+}
+async function odoAt(id, from, to, reverse, field) {
+  const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:!!reverse, filter:field }));
   const res = await api(`/gw/devices/${id}/messages?data=${data}`);
   if (!res || !res.length) return null;
-  const m = res[0];
-  return (m['can.vehicle.mileage'] != null) ? m['can.vehicle.mileage'] : null;
+  return (res[0][field] != null) ? res[0][field] : null;
 }
 async function dayMileage(id, from, to) {
   to = to || Math.floor(Date.now()/1000);
-  const [first, last] = await Promise.all([ odoAt(id, from, to, false), odoAt(id, from, to, true) ]);
+  const field = await mileageField(id, from, to);
+  if (!field) return null;
+  const [first, last] = await Promise.all([ odoAt(id, from, to, false, field), odoAt(id, from, to, true, field) ]);
   if (first == null || last == null) return null;
   const km = Math.round(last - first);
   return km >= 0 ? km : null;
