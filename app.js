@@ -186,15 +186,24 @@ function statusOnline(tel) {
   if (!ts) return false;
   return (Date.now()/1000 - ts) < ONLINE_SEC;
 }
-// авто ЗАДІЯНЕ = свіжі дані + ДВИГУН ЗАВЕДЕНИЙ (запалювання).
-// Рух/швидкість НЕ враховуємо: РЕБ може створити фейковий рух і телепорт у чужу локацію.
+// авто ЗАДІЯНЕ = свіжі дані + двигун/авто УВІМКНЕНЕ.
+// Сигнали беремо з електрики/CAN авто (РЕБ-стійкі, бо НЕ залежать від GPS):
+//   1) бортова напруга ≥13В — генератор/DC-DC заряджає → заведено (універсально, всі авто й електрички)
+//   2) оберти двигуна >0 (ДВЗ)   3) запалювання=true (резерв, де дріт підключено)
+// Рух/швидкість НЕ використовуємо — РЕБ створює фейковий рух і телепорт.
 function isActive(tel, online) {
-  return !!online && (tv(tel,'engine.ignition.status') === true);
+  if (!online) return false;
+  const volt = tv(tel,'external.powersource.voltage');
+  if (volt != null && volt >= 13.0) return true;
+  const rpm = tv(tel,'can.engine.rpm');
+  if (rpm != null && rpm > 0) return true;
+  return tv(tel,'engine.ignition.status') === true;
 }
 
 function renderCards(devs) {
   const list = document.getElementById('list');
   list.innerHTML = '';
+  let nActive = 0, nParked = 0, nOffline = 0;
   for (const d of devs) {
     const tel = d.telemetry || {};
     const liters = fuelLiters(d, tel);
@@ -202,6 +211,7 @@ function renderCards(devs) {
     const spd = tv(tel, 'position.speed');
     const online = statusOnline(tel);
     const lastTs = tts(tel, 'position') || tts(tel, 'can.vehicle.mileage');
+    const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
 
     const ev = evBatt(tel);
     const fuelTxt = ev.soc != null ? Math.round(ev.soc) + ' %'
@@ -210,7 +220,9 @@ function renderCards(devs) {
     const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
     const active = isActive(tel, online);
-    if (active) delete standingCache[d.id];   // поки в роботі — скидаємо кеш простою
+    if (active) { nActive++; delete standingCache[d.id]; }   // поки в роботі — скидаємо кеш простою
+    else if (online) nParked++;
+    else nOffline++;
     const spdTxt = (spd != null && spd >= 3) ? Math.round(spd) + ' км/г'
                  : (active ? 'працює' : (online ? 'стоїть' : '—'));
 
@@ -225,6 +237,9 @@ function renderCards(devs) {
     const diagHtml = diag.length
       ? `<div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--dim);flex-wrap:wrap">${diag.map(x=>`<span>${x}</span>`).join('')}</div>`
       : '';
+    // де стоїть (адреса) — лише для незадіяних на звʼязку
+    const showLoc = !active && online && lat != null && lon != null;
+    const locHtml = showLoc ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>` : '';
 
     const card = document.createElement('div');
     card.className = 'card' + (active ? ' active' : '');
@@ -243,7 +258,7 @@ function renderCards(devs) {
         <div class="cell"><div class="v fuel">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
         <div class="cell"><div class="v" id="dm_${d.id}">…</div><div class="l">за сьогодні</div></div>
         <div class="cell"><div class="v">${spdTxt}</div><div class="l">${odoTxt}</div></div>
-      </div>${diagHtml}`;
+      </div>${diagHtml}${locHtml}`;
     list.appendChild(card);
 
     dayMileage(d.id, startOfDay()).then(km => {
@@ -257,7 +272,19 @@ function renderCards(devs) {
         if (el) el.textContent = txt;
       }).catch(()=>{ const el=document.getElementById('st_'+d.id); if(el) el.textContent='—'; });
     }
+    if (showLoc) {
+      geocode(lat, lon).then(addr => {
+        const el = document.getElementById('loc_' + d.id);
+        if (el) el.textContent = addr || (lat.toFixed(4) + ', ' + lon.toFixed(4));
+      }).catch(()=>{ const el=document.getElementById('loc_'+d.id); if(el) el.textContent = lat.toFixed(4)+', '+lon.toFixed(4); });
+    }
   }
+
+  // підсумок зверху: скільки в роботі / стоять / офлайн
+  const sum = document.createElement('div');
+  sum.style.cssText = 'display:flex;gap:18px;justify-content:center;align-items:center;padding:9px 10px;margin-bottom:10px;font-size:13px;font-weight:600;background:rgba(255,255,255,.04);border-radius:10px';
+  sum.innerHTML = `<span style="color:#2ecc71">🟢 ${nActive} в роботі</span><span style="color:#a0a8b4">🅿️ ${nParked} стоять</span>${nOffline?`<span style="color:#6b7280">⚫ ${nOffline} офлайн</span>`:''}`;
+  list.insertBefore(sum, list.firstChild);
 }
 
 // шари карти — Google (дорожня/супутник/гібрид), з укр. підписами
@@ -340,17 +367,18 @@ function fmtStanding(sec){
 }
 async function lastActiveInfo(id){
   const now = Math.floor(Date.now()/1000);
-  // активність = ЗАПУСК ДВИГУНА (запалювання). Рух не рахуємо — РЕБ може підробити швидкість/телепорт.
+  // активність = двигун/авто було увімкнене: напруга ≥13В АБО оберти>0 АБО запалювання=true (РЕБ-стійко, без руху).
   // тир 1 — недавні повідомлення (для щоденних авто знайде швидко й дешево); тир 2 — глибше, якщо стоїть давно
-  for (const pair of [[300,3],[12000,60]]) {
+  for (const pair of [[400,3],[12000,60]]) {
     const cnt = pair[0], days = pair[1];
-    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,engine.ignition.status' }));
+    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,external.powersource.voltage,can.engine.rpm,engine.ignition.status' }));
     let msgs;
     try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e){ return null; }
     for (const m of msgs) {
-      if (m['engine.ignition.status'] === true) return { ts: m.timestamp, found: true };   // знайшли реальний запуск
+      const v = m['external.powersource.voltage'], r = m['can.engine.rpm'], ig = m['engine.ignition.status'];
+      if ((v != null && v >= 13.0) || (r != null && r > 0) || ig === true) return { ts: m.timestamp, found: true };
     }
-    if (cnt > 1000 && msgs.length) return { ts: msgs[msgs.length-1].timestamp, found: false };  // запуску у вікні нема → «принаймні стільки»
+    if (cnt > 1000 && msgs.length) return { ts: msgs[msgs.length-1].timestamp, found: false };  // увімкнення у вікні нема → «принаймні стільки»
   }
   return null;
 }
@@ -368,6 +396,28 @@ async function standingText(id){
   }
   if (ts == null) return '—';
   return (atLeast ? '≥ ' : '') + fmtStanding(now - ts);
+}
+
+// ===== Адреса за координатами (зворотне геокодування OSM, з кешем) =====
+const geoCache = {};   // "lat,lon" → текст адреси
+async function geocode(lat, lon){
+  if (lat == null || lon == null) return '';
+  const key = lat.toFixed(4) + ',' + lon.toFixed(4);
+  if (geoCache[key] !== undefined) return geoCache[key];
+  geoCache[key] = '';   // позначка «в роботі», щоб не дублювати запит
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&accept-language=uk&lat=${lat}&lon=${lon}`);
+    const j = await r.json();
+    const a = j.address || {};
+    const road = a.road || a.pedestrian || a.residential || a.suburb || a.neighbourhood || '';
+    const num = a.house_number ? (' ' + a.house_number) : '';
+    const place = a.city || a.town || a.village || a.hamlet || a.municipality || '';
+    let txt = road ? (road + num) : place;
+    if (road && place && place !== road) txt = road + num + ', ' + place;
+    if (!txt) txt = (j.display_name || '').split(',').slice(0,2).join(',').trim();
+    geoCache[key] = txt || '';
+    return geoCache[key];
+  } catch(e) { return ''; }
 }
 
 // ===== ЗВЕДЕННЯ ЗА ПЕРІОД (все одним проходом по повідомленнях) =====

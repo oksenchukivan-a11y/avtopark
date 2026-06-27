@@ -1,7 +1,7 @@
 // Service worker — застосунок ставиться як додаток і працює офлайн.
 // Стратегія: код (html/js) — мережа-перша (оновлення видно одразу), статика — кеш-перша.
 // API flespi НЕ кешуємо — дані завжди свіжі.
-const CACHE = 'avtopark-v13';
+const CACHE = 'avtopark-v14';
 const SHELL = [
   './',
   './index.html',
@@ -27,8 +27,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // дані flespi — завжди з мережі, без кешу
-  if (url.includes('flespi.io')) {
+  // дані flespi та геокодування — завжди з мережі, без кешу
+  if (url.includes('flespi.io') || url.includes('nominatim')) {
     e.respondWith(fetch(e.request).catch(() => new Response('', { status: 503 })));
     return;
   }
