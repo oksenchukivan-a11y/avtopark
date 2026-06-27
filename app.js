@@ -211,16 +211,18 @@ function renderCards(devs) {
     const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
     const active = isActive(tel, online);
+    if (active) delete standingCache[d.id];   // поки в роботі — скидаємо кеш простою
     const spdTxt = (spd != null && spd >= 3) ? Math.round(spd) + ' км/г'
                  : (active ? 'працює' : (online ? 'стоїть' : '—'));
 
-    // діагностика: акумулятор · звʼязок · супутники
+    // діагностика: акумулятор · звʼязок · супутники · простій
     const volt = vehVolt(tel), gsm = gsmInfo(tel), sats = satCount(tel);
     const diag = [];
     if (volt != null) diag.push(`🔋 ${volt.toFixed(1)} В`);
     else { const tb = trkBatt(tel); if (tb != null) diag.push(`🔋 ${Math.round(tb)}% (трекер)`); }
     if (gsm) diag.push(`📶 ${gsm.label}`);
     if (sats != null) diag.push(`🛰️ ${sats}`);
+    if (!active && online) diag.push(`🅿️ <span id="st_${d.id}">…</span>`);   // скільки стоїть (простій)
     const diagHtml = diag.length
       ? `<div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--dim);flex-wrap:wrap">${diag.map(x=>`<span>${x}</span>`).join('')}</div>`
       : '';
@@ -249,6 +251,13 @@ function renderCards(devs) {
       const el = document.getElementById('dm_' + d.id);
       if (el) el.textContent = (km != null ? km + ' км' : '—');
     }).catch(()=>{ const el=document.getElementById('dm_'+d.id); if(el) el.textContent='—'; });
+
+    if (!active && online) {
+      standingDuration(d.id).then(sec => {
+        const el = document.getElementById('st_' + d.id);
+        if (el) el.textContent = (sec != null) ? fmtStanding(sec) : '—';
+      }).catch(()=>{ const el=document.getElementById('st_'+d.id); if(el) el.textContent='—'; });
+    }
   }
 }
 
@@ -318,6 +327,40 @@ async function dayMileage(id, from, to) {
   if (first == null || last == null) return null;
   const km = Math.round(last - first);
   return km >= 0 ? km : null;
+}
+
+// ===== Скільки авто СТОЇТЬ (простій) — від останньої активності двигуна/руху =====
+const standingCache = {};   // id -> { ts:<останній активний момент, сек>, at:<коли запитали, мс> }
+function fmtStanding(sec){
+  if (sec == null) return null;
+  sec = Math.max(0, Math.round(sec));
+  const d = Math.floor(sec/86400), h = Math.floor((sec%86400)/3600), m = Math.floor((sec%3600)/60);
+  if (d > 0) return `${d} дн ${h} год`;
+  if (h > 0) return `${h} год ${m} хв`;
+  return `${m} хв`;
+}
+async function lastActiveTs(id){
+  const now = Math.floor(Date.now()/1000);
+  // тир 1 — недавні повідомлення (для щоденних авто знайде швидко й дешево); тир 2 — глибше, якщо стоїть давно
+  for (const pair of [[300,3],[12000,60]]) {
+    const cnt = pair[0], days = pair[1];
+    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,engine.ignition.status,position.speed' }));
+    let msgs;
+    try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e){ return null; }
+    for (const m of msgs) {
+      if (m['engine.ignition.status'] === true || (m['position.speed'] != null && m['position.speed'] >= 3)) return m.timestamp;
+    }
+    if (cnt > 1000 && msgs.length) return msgs[msgs.length-1].timestamp;   // активності у вікні нема → «принаймні стільки»
+  }
+  return null;
+}
+async function standingDuration(id){
+  const now = Math.floor(Date.now()/1000);
+  const c = standingCache[id];
+  if (c && c.ts != null && (Date.now()-c.at) < 1800000) return now - c.ts;   // кеш 30 хв (момент простою фіксований)
+  const ts = await lastActiveTs(id);
+  standingCache[id] = { ts, at: Date.now() };
+  return (ts != null) ? (now - ts) : null;
 }
 
 // ===== ЗВЕДЕННЯ ЗА ПЕРІОД (все одним проходом по повідомленнях) =====
@@ -441,6 +484,7 @@ function openDetail(d) {
       <div class="row"><span class="k">🔋 Батарея трекера</span><span class="val">${tb!=null?Math.round(tb)+' %':'—'}</span></div>
       <div class="row"><span class="k">📶 GSM сигнал</span><span class="val">${gsm?gsm.pct+'% · '+gsm.label:'—'}</span></div>
       <div class="row"><span class="k">🛰️ Супутники (GPS)</span><span class="val">${sats!=null?sats:'—'}</span></div>
+      <div class="row"><span class="k">🅿️ Стоїть (простій)</span><span class="val" id="dst">…</span></div>
     </div>`;
 
   document.getElementById('dBody').innerHTML = `
@@ -463,6 +507,15 @@ function openDetail(d) {
     </div>
 
     <div id="periodOut"><div class="spinner">…</div></div>`;
+
+  // простій у деталях (асинхронно)
+  const dOnline = statusOnline(tel), dActive = isActive(tel, dOnline);
+  const dstEl = document.getElementById('dst');
+  if (dstEl) {
+    if (dActive) dstEl.textContent = 'в роботі';
+    else if (!dOnline) dstEl.textContent = '—';
+    else standingDuration(d.id).then(s => { if (dstEl) dstEl.textContent = (s!=null?fmtStanding(s):'—'); }).catch(()=>{ if (dstEl) dstEl.textContent='—'; });
+  }
 
   // деталеву мапу перестворюємо
   if (dMap) { dMap.remove(); dMap = null; }
