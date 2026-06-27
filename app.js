@@ -197,7 +197,11 @@ function renderCards(devs) {
                    : (tv(tel,'can.fuel.level') != null ? tv(tel,'can.fuel.level')+' %' : '—'));
     const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
-    const spdTxt = spd != null && spd >= 3 ? Math.round(spd) + ' км/г' : (online ? 'стоїть' : '—');
+    // авто ЗАДІЯНЕ = свіжі дані + двигун заведений (запалювання) АБО їде / рухається
+    const ignition = tv(tel,'engine.ignition.status');
+    const active = online && ((ignition === true) || (spd != null && spd >= 3) || (tv(tel,'movement.status') === true));
+    const spdTxt = (spd != null && spd >= 3) ? Math.round(spd) + ' км/г'
+                 : (active ? 'працює' : (online ? 'стоїть' : '—'));
 
     // діагностика: акумулятор · звʼязок · супутники
     const volt = vehVolt(tel), gsm = gsmInfo(tel), sats = satCount(tel);
@@ -211,13 +215,17 @@ function renderCards(devs) {
       : '';
 
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card' + (active ? ' active' : '');
+    // зелена підсвітка збоку, коли авто задіяне (двигун заведений)
+    card.style.borderLeft = active ? '4px solid #2ecc71' : '4px solid transparent';
+    card.style.boxShadow = active ? '0 0 0 1px rgba(46,204,113,.35), 0 0 14px rgba(46,204,113,.18)' : '';
     card.onclick = () => openDetail(d);
+    const dotColor = active ? '#2ecc71' : (online ? '#8a929c' : '#454b54');
     card.innerHTML = `
       <div class="top">
-        <span class="dot ${online?'on':'off'}"></span>
+        <span class="dot" style="background:${dotColor};${active?'box-shadow:0 0 7px #2ecc71':''}"></span>
         <span class="name">${d.name}</span>
-        <span class="badge" style="margin:0">${lastTs?ago(lastTs):''}</span>
+        <span class="badge" style="margin:0;${active?'color:#2ecc71':''}">${active?'🟢 в роботі':(lastTs?ago(lastTs):'')}</span>
       </div>
       <div class="grid">
         <div class="cell"><div class="v fuel">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
