@@ -150,15 +150,22 @@ async function rebootTracker(id) {
 }
 
 // ===== Іконка машини на карті (з метаданих) =====
-function markerFor(dev, latlon, online) {
+// active = двигун у роботі → зелений світний обідок (колір машини для впізнавання лишається)
+function vehIcon(dev, online, active) {
   const m = dev.metadata || {};
   const color = m.color || '#3aa0ff';
   const icon = m.icon || '🚗';
-  const short = m.short || dev.name || '';
   const dim = online ? 1 : 0.55;
-  const html = '<div style="opacity:'+dim+';background:'+color+';border:2px solid #fff;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px;box-shadow:0 2px 7px rgba(0,0,0,.5)">'+icon+'</div>';
-  const di = L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
-  const mk = L.marker(latlon, { icon: di });
+  const ring = active
+    ? 'border:3px solid #2ecc71;box-shadow:0 0 11px 3px rgba(46,204,113,.85),0 2px 7px rgba(0,0,0,.5)'
+    : 'border:2px solid #fff;box-shadow:0 2px 7px rgba(0,0,0,.5)';
+  const html = '<div style="opacity:'+dim+';background:'+color+';'+ring+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px">'+icon+'</div>';
+  return L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
+}
+function markerFor(dev, latlon, online, active) {
+  const m = dev.metadata || {};
+  const short = m.short || dev.name || '';
+  const mk = L.marker(latlon, { icon: vehIcon(dev, online, active) });
   mk.bindTooltip(short, { permanent:true, direction:'right', offset:[16,0], className:'veh-label' });
   return mk;
 }
@@ -179,6 +186,12 @@ function statusOnline(tel) {
   if (!ts) return false;
   return (Date.now()/1000 - ts) < ONLINE_SEC;
 }
+// авто ЗАДІЯНЕ = свіжі дані + двигун заведений (запалювання) АБО їде / рухається
+function isActive(tel, online) {
+  const ign = tv(tel,'engine.ignition.status');
+  const spd = tv(tel,'position.speed');
+  return !!online && ((ign === true) || (spd != null && spd >= 3) || (tv(tel,'movement.status') === true));
+}
 
 function renderCards(devs) {
   const list = document.getElementById('list');
@@ -197,9 +210,7 @@ function renderCards(devs) {
                    : (tv(tel,'can.fuel.level') != null ? tv(tel,'can.fuel.level')+' %' : '—'));
     const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
-    // авто ЗАДІЯНЕ = свіжі дані + двигун заведений (запалювання) АБО їде / рухається
-    const ignition = tv(tel,'engine.ignition.status');
-    const active = online && ((ignition === true) || (spd != null && spd >= 3) || (tv(tel,'movement.status') === true));
+    const active = isActive(tel, online);
     const spdTxt = (spd != null && spd >= 3) ? Math.round(spd) + ' км/г'
                  : (active ? 'працює' : (online ? 'стоїть' : '—'));
 
@@ -266,14 +277,17 @@ function renderMap(devs) {
     const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
     if (lat == null || lon == null) continue;
     const online = statusOnline(tel);
+    const active = isActive(tel, online);
     const liters = fuelLiters(d, tel);
     pts.push([lat,lon]);
-    const html = `<b>${d.name}</b><br>${liters!=null?liters+' л':''} ${online?'🟢 онлайн':'⚪ офлайн'}`;
+    const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
+    const html = `<b>${d.name}</b><br>${status}${liters!=null?' · '+liters+' л':''}`;
     if (markers[d.id]) {
       markers[d.id].setLatLng([lat,lon]);
+      markers[d.id].setIcon(vehIcon(d, online, active));   // оновлюємо обідок (завівся / заглушив)
       const pp = markers[d.id].getPopup(); if (pp) pp.setContent(html);
     } else {
-      markers[d.id] = markerFor(d, [lat,lon], online).addTo(map).bindPopup(html);
+      markers[d.id] = markerFor(d, [lat,lon], online, active).addTo(map).bindPopup(html);
     }
   }
   if (pts.length && !map._fitted) { map.fitBounds(pts, { padding:[40,40], maxZoom:13 }); map._fitted = true; }
