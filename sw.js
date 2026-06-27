@@ -1,7 +1,7 @@
 // Service worker — застосунок ставиться як додаток і працює офлайн.
 // Стратегія: код (html/js) — мережа-перша (оновлення видно одразу), статика — кеш-перша.
 // API flespi НЕ кешуємо — дані завжди свіжі.
-const CACHE = 'avtopark-v14';
+const CACHE = 'avtopark-v15';
 const SHELL = [
   './',
   './index.html',

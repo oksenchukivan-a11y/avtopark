@@ -156,11 +156,15 @@ function vehIcon(dev, online, active) {
   const color = m.color || '#3aa0ff';
   const icon = m.icon || '🚗';
   const dim = online ? 1 : 0.55;
-  const ring = active
-    ? 'border:3px solid #2ecc71;box-shadow:0 0 11px 3px rgba(46,204,113,.85),0 2px 7px rgba(0,0,0,.5)'
-    : 'border:2px solid #fff;box-shadow:0 2px 7px rgba(0,0,0,.5)';
-  const html = '<div style="opacity:'+dim+';background:'+color+';'+ring+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:17px">'+icon+'</div>';
-  return L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
+  const inner = '<div style="opacity:'+dim+';background:'+color+';border:2px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.55)">'+icon+'</div>';
+  if (active) {
+    // помітне зелене кільце-ореол навколо машини, що в роботі
+    const html = '<div style="position:relative;width:46px;height:46px;display:flex;align-items:center;justify-content:center">'
+      + '<div style="position:absolute;inset:0;border-radius:50%;border:3px solid #2ecc71;box-shadow:0 0 12px 4px rgba(46,204,113,.95),inset 0 0 6px rgba(46,204,113,.6)"></div>'
+      + inner + '</div>';
+    return L.divIcon({ className:'', html, iconSize:[46,46], iconAnchor:[23,23] });
+  }
+  return L.divIcon({ className:'', html: inner, iconSize:[30,30], iconAnchor:[15,15] });
 }
 function markerFor(dev, latlon, online, active) {
   const m = dev.metadata || {};
@@ -369,7 +373,7 @@ async function lastActiveInfo(id){
   const now = Math.floor(Date.now()/1000);
   // активність = двигун/авто було увімкнене: напруга ≥13В АБО оберти>0 АБО запалювання=true (РЕБ-стійко, без руху).
   // тир 1 — недавні повідомлення (для щоденних авто знайде швидко й дешево); тир 2 — глибше, якщо стоїть давно
-  for (const pair of [[400,3],[12000,60]]) {
+  for (const pair of [[400,3],[3000,45]]) {
     const cnt = pair[0], days = pair[1];
     const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,external.powersource.voltage,can.engine.rpm,engine.ignition.status' }));
     let msgs;
@@ -398,26 +402,33 @@ async function standingText(id){
   return (atLeast ? '≥ ' : '') + fmtStanding(now - ts);
 }
 
-// ===== Адреса за координатами (зворотне геокодування OSM, з кешем) =====
-const geoCache = {};   // "lat,lon" → текст адреси
-async function geocode(lat, lon){
-  if (lat == null || lon == null) return '';
+// ===== Адреса за координатами (зворотне геокодування OSM) =====
+// Кеш у localStorage (між сесіями) + СЕРІЙНА черга (по одному запиту — щоб не ловити ліміт Nominatim і не гальмувати).
+let geoCache = {};
+try { geoCache = JSON.parse(localStorage.getItem('geoCache') || '{}'); } catch(e) { geoCache = {}; }
+let geoQueue = Promise.resolve();
+function geocode(lat, lon){
+  if (lat == null || lon == null) return Promise.resolve('');
   const key = lat.toFixed(4) + ',' + lon.toFixed(4);
-  if (geoCache[key] !== undefined) return geoCache[key];
-  geoCache[key] = '';   // позначка «в роботі», щоб не дублювати запит
-  try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&accept-language=uk&lat=${lat}&lon=${lon}`);
-    const j = await r.json();
-    const a = j.address || {};
-    const road = a.road || a.pedestrian || a.residential || a.suburb || a.neighbourhood || '';
-    const num = a.house_number ? (' ' + a.house_number) : '';
-    const place = a.city || a.town || a.village || a.hamlet || a.municipality || '';
-    let txt = road ? (road + num) : place;
-    if (road && place && place !== road) txt = road + num + ', ' + place;
-    if (!txt) txt = (j.display_name || '').split(',').slice(0,2).join(',').trim();
-    geoCache[key] = txt || '';
-    return geoCache[key];
-  } catch(e) { return ''; }
+  if (geoCache[key] !== undefined) return Promise.resolve(geoCache[key]);
+  geoQueue = geoQueue.then(async () => {
+    if (geoCache[key] !== undefined) return;   // могли закешувати, поки стояли в черзі
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&accept-language=uk&lat=${lat}&lon=${lon}`);
+      const j = await r.json();
+      const a = j.address || {};
+      const road = a.road || a.pedestrian || a.residential || a.suburb || a.neighbourhood || '';
+      const num = a.house_number ? (' ' + a.house_number) : '';
+      const place = a.city || a.town || a.village || a.hamlet || a.municipality || '';
+      let txt = road ? (road + num) : place;
+      if (road && place && place !== road) txt = road + num + ', ' + place;
+      if (!txt) txt = (j.display_name || '').split(',').slice(0,2).join(',').trim();
+      geoCache[key] = txt || '';
+      try { localStorage.setItem('geoCache', JSON.stringify(geoCache)); } catch(e){}
+    } catch(e) { /* помилку не кешуємо — спробуємо іншим разом */ }
+    await new Promise(res => setTimeout(res, 1100));   // пауза під ліміт Nominatim (1/сек)
+  });
+  return geoQueue.then(() => geoCache[key] || '');
 }
 
 // ===== ЗВЕДЕННЯ ЗА ПЕРІОД (все одним проходом по повідомленнях) =====
