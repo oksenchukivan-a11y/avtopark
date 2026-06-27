@@ -111,6 +111,33 @@ function fuelLiters(dev, tel) {
   return null;
 }
 
+// ===== Стан акумулятора / звʼязку / супутників (діагностика) =====
+function vehVolt(tel){ return tv(tel, 'external.powersource.voltage'); }   // бортова напруга (12В акумулятор авто)
+function trkBatt(tel){ return tv(tel, 'battery.level'); }                  // батарея самого трекера, %
+function satCount(tel){ return tv(tel, 'position.satellites'); }          // супутники GPS
+function gsmInfo(tel){
+  let g = tv(tel, 'gsm.signal.level');
+  if (g == null) return null;
+  const pct = g <= 5 ? Math.round(g/5*100) : Math.round(g);   // Teltonika: шкала 0-5 або 0-100 → у %
+  const label = pct>=80?'відмінний' : pct>=50?'добрий' : pct>=25?'слабкий' : 'поганий';
+  return { pct, label };
+}
+function voltHealth(v){   // оцінка стану 12В акумулятора
+  if (v == null) return '';
+  if (v >= 13.0) return 'заряджається';   // двигун працює (генератор дає 13.5-14.5В)
+  if (v >= 12.4) return 'норма';          // повний у спокої
+  if (v >= 12.0) return 'низький';
+  return 'слабкий';                        // < 12В — сідає
+}
+// EV-батарея (тягова) — для електричок
+function evBatt(tel){
+  return {
+    soc: tv(tel,'can.vehicle.battery.level'),       // заряд, %
+    soh: tv(tel,'can.vehicle.battery.health'),      // здоровʼя (знос), %
+    range: tv(tel,'can.vehicle.remaining.range'),   // запас ходу, км
+  };
+}
+
 // ===== Перезавантаження трекера (для зависань) =====
 async function rebootTracker(id) {
   const dev = devCache.find(d => d.id === id);
@@ -164,10 +191,24 @@ function renderCards(devs) {
     const online = statusOnline(tel);
     const lastTs = tts(tel, 'position') || tts(tel, 'can.vehicle.mileage');
 
-    const fuelTxt = liters != null ? liters + ' л'
-                   : (tv(tel,'can.fuel.level') != null ? tv(tel,'can.fuel.level')+' %' : '—');
+    const ev = evBatt(tel);
+    const fuelTxt = ev.soc != null ? Math.round(ev.soc) + ' %'
+                   : (liters != null ? liters + ' л'
+                   : (tv(tel,'can.fuel.level') != null ? tv(tel,'can.fuel.level')+' %' : '—'));
+    const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
     const spdTxt = spd != null && spd >= 3 ? Math.round(spd) + ' км/г' : (online ? 'стоїть' : '—');
+
+    // діагностика: акумулятор · звʼязок · супутники
+    const volt = vehVolt(tel), gsm = gsmInfo(tel), sats = satCount(tel);
+    const diag = [];
+    if (volt != null) diag.push(`🔋 ${volt.toFixed(1)} В`);
+    else { const tb = trkBatt(tel); if (tb != null) diag.push(`🔋 ${Math.round(tb)}% (трекер)`); }
+    if (gsm) diag.push(`📶 ${gsm.label}`);
+    if (sats != null) diag.push(`🛰️ ${sats}`);
+    const diagHtml = diag.length
+      ? `<div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--dim);flex-wrap:wrap">${diag.map(x=>`<span>${x}</span>`).join('')}</div>`
+      : '';
 
     const card = document.createElement('div');
     card.className = 'card';
@@ -179,10 +220,10 @@ function renderCards(devs) {
         <span class="badge" style="margin:0">${lastTs?ago(lastTs):''}</span>
       </div>
       <div class="grid">
-        <div class="cell"><div class="v fuel">${fuelTxt}</div><div class="l">паливо</div></div>
+        <div class="cell"><div class="v fuel">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
         <div class="cell"><div class="v" id="dm_${d.id}">…</div><div class="l">за сьогодні</div></div>
         <div class="cell"><div class="v">${spdTxt}</div><div class="l">${odoTxt}</div></div>
-      </div>`;
+      </div>${diagHtml}`;
     list.appendChild(card);
 
     dayMileage(d.id, startOfDay()).then(km => {
@@ -364,15 +405,31 @@ function openDetail(d) {
   const odo = tv(tel,'can.vehicle.mileage');
   const range = tv(tel,'can.vehicle.remaining.range');
   const tank = tankFor(d);
+  const ev = evBatt(tel);
+  const volt = vehVolt(tel), tb = trkBatt(tel), gsm = gsmInfo(tel), sats = satCount(tel);
+
+  // головна цифра: для електрички — заряд+SoH, для решти — паливо
+  const firstBig = ev.soc != null
+    ? `<div><div class="big" style="color:var(--green)">${Math.round(ev.soc)} %</div><div class="l" style="color:var(--dim);font-size:12px">заряд батареї${ev.soh!=null?` · SoH ${Math.round(ev.soh)}%`:''}</div></div>`
+    : `<div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':(tv(tel,'can.fuel.level')!=null?tv(tel,'can.fuel.level')+' %':'—')}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${tank?` (бак ${tank} л)`:''}</div></div>`;
+
+  const diagBlock = `
+    <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:10px">
+      <div class="row"><span class="k">🔋 Бортовий акумулятор</span><span class="val">${volt!=null?volt.toFixed(1)+' В'+(voltHealth(volt)?' · '+voltHealth(volt):''):'—'}</span></div>
+      <div class="row"><span class="k">🔋 Батарея трекера</span><span class="val">${tb!=null?Math.round(tb)+' %':'—'}</span></div>
+      <div class="row"><span class="k">📶 GSM сигнал</span><span class="val">${gsm?gsm.pct+'% · '+gsm.label:'—'}</span></div>
+      <div class="row"><span class="k">🛰️ Супутники (GPS)</span><span class="val">${sats!=null?sats:'—'}</span></div>
+    </div>`;
 
   document.getElementById('dBody').innerHTML = `
     <div class="section">
       <h3>Зараз</h3>
       <div style="display:flex; gap:24px; align-items:baseline">
-        <div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':(tv(tel,'can.fuel.level')!=null?tv(tel,'can.fuel.level')+' %':'—')}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${tank?` (бак ${tank} л)`:''}</div></div>
+        ${firstBig}
         ${range!=null?`<div><div class="big">${Math.round(range)}</div><div class="l" style="color:var(--dim);font-size:12px">запас ходу, км</div></div>`:''}
         <div><div class="big">${odo!=null?Math.round(odo).toLocaleString('uk-UA'):'—'}</div><div class="l" style="color:var(--dim);font-size:12px">одометр, км</div></div>
       </div>
+      ${diagBlock}
       <button class="reboot" onclick="rebootTracker(${d.id})">🔄 Перезавантажити трекер</button>
     </div>
 
