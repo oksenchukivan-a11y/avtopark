@@ -109,7 +109,8 @@ function fuelLiters(dev, tel) {
   const direct = tv(tel, 'fuel.liters');       // плагін (літри)
   if (direct != null) return Math.round(direct);
   const vol = tv(tel, 'can.fuel.volume');      // деякі авто (Master) дають реальні літри напряму
-  if (vol != null && vol > 0) return Math.round(vol);
+  // КАЛІБРУВАННЯ: множник з реального експерименту заправки (metadata.fuelFactor), якщо датчик недо/перераховує
+  if (vol != null && vol > 0) return Math.round(vol * (md.fuelFactor || 1));
   if (pct != null && tank) return Math.round(pct / 100 * tank);   // решта: % × бак
   return null;
 }
@@ -132,12 +133,14 @@ function voltHealth(v){   // оцінка стану 12В акумулятора
   if (v >= 12.0) return 'низький';
   return 'слабкий';                        // < 12В — сідає
 }
+// запас ходу з відсіканням глюків (датчик інколи віддає абсурд типу 47722 км)
+function rangeKm(tel){ const r = tv(tel,'can.vehicle.remaining.range'); return (r != null && r > 0 && r <= 1500) ? Math.round(r) : null; }
 // EV-батарея (тягова) — для електричок
 function evBatt(tel){
   return {
     soc: tv(tel,'can.vehicle.battery.level'),       // заряд, %
     soh: tv(tel,'can.vehicle.battery.health'),      // здоровʼя (знос), %
-    range: tv(tel,'can.vehicle.remaining.range'),   // запас ходу, км
+    range: rangeKm(tel),                            // запас ходу, км (без глюків)
   };
 }
 // OBD-стан двигуна (з CAN авто)
@@ -216,7 +219,8 @@ function isActive(tel, online) {
   if (volt != null && volt >= 13.0) return true;
   if (tv(tel,'engine.ignition.status') === true) return true;
   const spd = tv(tel,'position.speed'), valid = tv(tel,'position.valid'), sats = tv(tel,'position.satellites');
-  if (spd != null && spd >= 5 && spd < 150 && valid === true && (sats == null || sats >= 5)) return true;
+  // підтверджений рух: швидкість + фікс не «невалідний» + достатньо супутників (не РЕБ-телепорт)
+  if (spd != null && spd >= 3 && spd < 150 && valid !== false && (sats == null || sats >= 4)) return true;
   return false;
 }
 
@@ -266,10 +270,10 @@ function renderCards(devs) {
     if (et != null && et >= 110) alerts.push(`🌡️ перегрів ${Math.round(et)}°C`);
     const alertHtml = alerts.length ? `<div style="margin-top:6px;font-size:12px;color:#e74c3c;font-weight:700">${alerts.join(' · ')}</div>` : '';
     // до ТО + запас ходу (цінне для користувача — на видноті в картці)
-    const sk = serviceKm(tel), rng = tv(tel,'can.vehicle.remaining.range');
+    const sk = serviceKm(tel), rng = rangeKm(tel);
     const infoArr = [];
     if (sk != null) infoArr.push(`🔧 ${Math.round(sk).toLocaleString('uk-UA')} км до ТО`);
-    if (rng != null) infoArr.push(`🛣️ ${Math.round(rng).toLocaleString('uk-UA')} км запас`);
+    if (rng != null) infoArr.push(`🛣️ ${rng.toLocaleString('uk-UA')} км запас`);
     const infoHtml = infoArr.length ? `<div style="margin-top:6px;font-size:12.5px;color:#c9d1d9">${infoArr.join('  ·  ')}</div>` : '';
 
     const card = document.createElement('div');
