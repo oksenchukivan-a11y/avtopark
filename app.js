@@ -136,6 +136,11 @@ function evBatt(tel){
     range: tv(tel,'can.vehicle.remaining.range'),   // запас ходу, км
   };
 }
+// OBD-стан двигуна (з CAN авто)
+function engineTemp(tel){ return tv(tel,'can.engine.coolant.temperature'); }   // °C
+function dtcCount(tel){ return tv(tel,'can.dtc.number'); }                      // к-сть помилок (check engine)
+function serviceKm(tel){ return tv(tel,'can.service.mileage'); }               // пробіг до ТО
+function adblueLevel(tel){ return tv(tel,'can.adblue.level'); }                // AdBlue % (дизелі)
 
 // ===== Перезавантаження трекера (для зависань) =====
 async function rebootTracker(id) {
@@ -250,6 +255,12 @@ function renderCards(devs) {
     // де стоїть (адреса) — лише для незадіяних на звʼязку
     const showLoc = !active && lat != null && lon != null;   // де стоїть — і для офлайн (остання відома точка)
     const locHtml = showLoc ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>` : '';
+    // тривога: помилки двигуна / перегрів — щоб проблемне авто було видно одразу
+    const et = engineTemp(tel), dtc = dtcCount(tel);
+    const alerts = [];
+    if (dtc != null && dtc > 0) alerts.push(`🛑 ${dtc} ${dtc===1?'помилка':'помилки'} двигуна`);
+    if (et != null && et >= 110) alerts.push(`🌡️ перегрів ${Math.round(et)}°C`);
+    const alertHtml = alerts.length ? `<div style="margin-top:6px;font-size:12px;color:#e74c3c;font-weight:700">${alerts.join(' · ')}</div>` : '';
 
     const card = document.createElement('div');
     card.className = 'card' + (active ? ' active' : '');
@@ -268,7 +279,7 @@ function renderCards(devs) {
         <div class="cell"><div class="v fuel">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
         <div class="cell"><div class="v" id="dm_${d.id}">…</div><div class="l">за сьогодні</div></div>
         <div class="cell"><div class="v">${spdTxt}</div><div class="l">${odoTxt}</div></div>
-      </div>${diagHtml}${locHtml}`;
+      </div>${diagHtml}${locHtml}${alertHtml}`;
     list.appendChild(card);
 
     dayMileage(d.id, startOfDay()).then(km => {
@@ -565,6 +576,15 @@ function openDetail(d) {
       <div class="row"><span class="k">🅿️ Стоїть (простій)</span><span class="val" id="dst">…</span></div>
     </div>`;
 
+  // ===== Двигун / OBD (з CAN авто) =====
+  const et = engineTemp(tel), dtc = dtcCount(tel), sk = serviceKm(tel), ab = adblueLevel(tel);
+  const obdRows = [];
+  if (et != null) obdRows.push(`<div class="row"><span class="k">🌡️ Температура двигуна</span><span class="val" style="${et>=110?'color:#e74c3c':''}">${Math.round(et)} °C${et>=110?' ⚠ перегрів':''}</span></div>`);
+  if (dtc != null) obdRows.push(`<div class="row"><span class="k">🛑 Помилки двигуна</span><span class="val" style="color:${dtc>0?'#e74c3c':'#2ecc71'}">${dtc>0?dtc+' — перевір!':'нема (0) ✅'}</span></div>`);
+  if (sk != null) obdRows.push(`<div class="row"><span class="k">🔧 До ТО</span><span class="val">${Math.round(sk).toLocaleString('uk-UA')} км</span></div>`);
+  if (ab != null) obdRows.push(`<div class="row"><span class="k">💧 AdBlue</span><span class="val">${Math.round(ab)} %</span></div>`);
+  const obdBlock = obdRows.length ? `<div class="section"><h3>Двигун / OBD</h3>${obdRows.join('')}</div>` : '';
+
   document.getElementById('dBody').innerHTML = `
     <div class="section">
       <h3>Зараз</h3>
@@ -576,7 +596,7 @@ function openDetail(d) {
       ${diagBlock}
       <button class="reboot" onclick="rebootTracker(${d.id})">🔄 Перезавантажити трекер</button>
     </div>
-
+    ${obdBlock}
     <div class="tabs">
       <div class="tab active" data-p="today" onclick="loadPeriod(this)">Сьогодні</div>
       <div class="tab" data-p="yest" onclick="loadPeriod(this)">Вчора</div>
