@@ -100,13 +100,17 @@ function tankFor(x) {
 
 // ===== Паливо у літрах =====
 function fuelLiters(dev, tel) {
-  const direct = tv(tel, 'fuel.liters');
-  if (direct != null) return Math.round(direct);
-  const vol = tv(tel, 'can.fuel.volume');     // деякі авто (Master) дають літри напряму
-  if (vol != null && vol > 0) return Math.round(vol);
-  const pct = tv(tel, 'can.fuel.level');       // інші (Audi) — відсоток × бак
+  const md = (dev && typeof dev === 'object' && dev.metadata) || {};
+  const pct = tv(tel, 'can.fuel.level');       // рівень палива, %
   const tank = tankFor(dev);
-  if (pct != null && tank) return Math.round(pct / 100 * tank);
+  // КАЛІБРУВАННЯ: якщо OEM-літри для цього авто ненадійні (metadata.fuelByPct=true) —
+  // рахуємо точно: % × реальний бак (для Renault Kangoo 8440, де can.fuel.volume бреше)
+  if (md.fuelByPct && pct != null && tank) return Math.round(pct / 100 * tank);
+  const direct = tv(tel, 'fuel.liters');       // плагін (літри)
+  if (direct != null) return Math.round(direct);
+  const vol = tv(tel, 'can.fuel.volume');      // деякі авто (Master) дають реальні літри напряму
+  if (vol != null && vol > 0) return Math.round(vol);
+  if (pct != null && tank) return Math.round(pct / 100 * tank);   // решта: % × бак
   return null;
 }
 
