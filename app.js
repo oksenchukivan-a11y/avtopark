@@ -350,10 +350,12 @@ async function mileageField(id, from, to) {
   return null;
 }
 async function odoAt(id, from, to, reverse, field) {
-  const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:!!reverse, filter:field }));
+  // беремо до 10 з краю і пропускаємо глюки-нулі (деякі авто, як Kangoo 8440, віддають одометр=0)
+  const data = encodeURIComponent(JSON.stringify({ from, to, count:10, reverse:!!reverse, filter:field, fields:'timestamp,'+field }));
   const res = await api(`/gw/devices/${id}/messages?data=${data}`);
   if (!res || !res.length) return null;
-  return (res[0][field] != null) ? res[0][field] : null;
+  for (const m of res) { const v = m[field]; if (v != null && v > 0) return v; }
+  return null;
 }
 async function dayMileage(id, from, to) {
   to = to || Math.floor(Date.now()/1000);
@@ -362,7 +364,8 @@ async function dayMileage(id, from, to) {
   const [first, last] = await Promise.all([ odoAt(id, from, to, false, field), odoAt(id, from, to, true, field) ]);
   if (first == null || last == null) return null;
   const km = Math.round(last - first);
-  return km >= 0 ? km : null;
+  if (km < 0 || km > 3000) return null;   // негатив або абсурд (глюк одометра) — краще нічого, ніж дурне число
+  return km;
 }
 
 // ===== Скільки авто СТОЇТЬ (простій) — від останньої активності двигуна/руху =====
@@ -472,7 +475,7 @@ async function periodReport(id, from, to) {
     let sp = m['position.speed'];
     if (sp == null) sp = m['can.vehicle.speed'];
     const od = m['can.vehicle.mileage'];
-    if (od != null) { curOdo = od; if (stopStart != null && stopOdo == null) stopOdo = od; }
+    if (od != null && od > 0) { curOdo = od; if (stopStart != null && stopOdo == null) stopOdo = od; }  // od>0: ігнор глюків-нулів
 
     // валідність GPS-фіксу — відсікаємо «стрибки» (дефолтна/застаріла позиція без супутників)
     const valid = m['position.valid'];
