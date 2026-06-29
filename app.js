@@ -261,6 +261,12 @@ function renderCards(devs) {
     if (dtc != null && dtc > 0) alerts.push(`🛑 ${dtc} ${dtc===1?'помилка':'помилки'} двигуна`);
     if (et != null && et >= 110) alerts.push(`🌡️ перегрів ${Math.round(et)}°C`);
     const alertHtml = alerts.length ? `<div style="margin-top:6px;font-size:12px;color:#e74c3c;font-weight:700">${alerts.join(' · ')}</div>` : '';
+    // до ТО + запас ходу (цінне для користувача — на видноті в картці)
+    const sk = serviceKm(tel), rng = tv(tel,'can.vehicle.remaining.range');
+    const infoArr = [];
+    if (sk != null) infoArr.push(`🔧 ${Math.round(sk).toLocaleString('uk-UA')} км до ТО`);
+    if (rng != null) infoArr.push(`🛣️ ${Math.round(rng).toLocaleString('uk-UA')} км запас`);
+    const infoHtml = infoArr.length ? `<div style="margin-top:6px;font-size:12.5px;color:#c9d1d9">${infoArr.join('  ·  ')}</div>` : '';
 
     const card = document.createElement('div');
     card.className = 'card' + (active ? ' active' : '');
@@ -279,7 +285,7 @@ function renderCards(devs) {
         <div class="cell"><div class="v fuel">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
         <div class="cell"><div class="v" id="dm_${d.id}">…</div><div class="l">за сьогодні</div></div>
         <div class="cell"><div class="v">${spdTxt}</div><div class="l">${odoTxt}</div></div>
-      </div>${diagHtml}${locHtml}${alertHtml}`;
+      </div>${infoHtml}${diagHtml}${locHtml}${alertHtml}`;
     list.appendChild(card);
 
     dayMileage(d.id, startOfDay()).then(km => {
