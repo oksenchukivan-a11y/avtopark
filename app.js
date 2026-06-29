@@ -195,14 +195,20 @@ function statusOnline(tel) {
 //   2) оберти двигуна >0 (ДВЗ)   3) запалювання=true (резерв, де дріт підключено)
 // Рух/швидкість НЕ використовуємо — РЕБ створює фейковий рух і телепорт.
 function isActive(tel, online) {
-  // ГОЛОВНЕ — бортова напруга ≥13В: генератор/DC-DC заряджає = двигун/авто заведене.
-  // Оновлюється щомиті, реально показує стан, РЕБ-стійко (з електрики авто, не з GPS).
-  // + запалювання=true як резерв (електрички). RPM НЕ беремо — у телеметрії воно «застрягає»
-  //   на старому значенні при заглушеному двигуні (хибно показувало «в роботі»).
+  // Авто ЗАДІЯНЕ, якщо є хоч один надійний (РЕБ-стійкий) сигнал:
+  //   1) бортова напруга ≥13В — генератор/DC-DC заряджає (оновлюється щомиті)
+  //   2) запалювання=true (де OBD його віддає)
+  //   3) ПІДТВЕРДЖЕНИЙ реальний рух — для авто, що не дають сигналів двигуна (як Renault Kangoo 8440,
+  //      який віддає лише VIN+одометр). Рух «підтверджений» = швидкість + ВАЛІДНИЙ GPS-фікс + багато
+  //      супутників → це НЕ РЕБ-телепорт (той дає невалідний фікс / мало супутників / стрибок).
+  // RPM не беремо — у телеметрії «застрягає» на старому значенні.
   if (!online) return false;
   const volt = tv(tel,'external.powersource.voltage');
   if (volt != null && volt >= 13.0) return true;
-  return tv(tel,'engine.ignition.status') === true;
+  if (tv(tel,'engine.ignition.status') === true) return true;
+  const spd = tv(tel,'position.speed'), valid = tv(tel,'position.valid'), sats = tv(tel,'position.satellites');
+  if (spd != null && spd >= 5 && spd < 150 && valid === true && (sats == null || sats >= 5)) return true;
+  return false;
 }
 
 function renderCards(devs) {
@@ -375,12 +381,13 @@ async function lastActiveInfo(id){
   // тир 1 — недавні повідомлення (для щоденних авто знайде швидко й дешево); тир 2 — глибше, якщо стоїть давно
   for (const pair of [[400,3],[3000,45]]) {
     const cnt = pair[0], days = pair[1];
-    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,external.powersource.voltage,engine.ignition.status' }));
+    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,external.powersource.voltage,engine.ignition.status,position.speed,position.valid' }));
     let msgs;
     try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e){ return null; }
     for (const m of msgs) {
       const v = m['external.powersource.voltage'], ig = m['engine.ignition.status'];
-      if ((v != null && v >= 13.0) || ig === true) return { ts: m.timestamp, found: true };
+      const sp = m['position.speed'], vd = m['position.valid'];
+      if ((v != null && v >= 13.0) || ig === true || (sp != null && sp >= 5 && vd !== false)) return { ts: m.timestamp, found: true };
     }
     if (cnt > 1000 && msgs.length) return { ts: msgs[msgs.length-1].timestamp, found: false };  // увімкнення у вікні нема → «принаймні стільки»
   }
