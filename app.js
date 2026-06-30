@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v25';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v26';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 30000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -231,6 +231,19 @@ function isActive(tel, online) {
   if (spd != null && spd >= 3 && spd < 150 && valid !== false && (sats == null || sats >= 4)) return true;
   return false;
 }
+// ЛИПКІСТЬ: раз авто було активне — лишається «в роботі» ще 4 хв (зглажує світлофори, короткі
+// зупинки й паузи між пакетами даних). Стан у localStorage — переживає авто-перезавантаження.
+const ACTIVE_STICK_MS = 240000;
+let activeSeen = {};
+try { activeSeen = JSON.parse(localStorage.getItem('activeSeen') || '{}'); } catch(e) { activeSeen = {}; }
+function displayActive(dev, tel, online) {
+  if (isActive(tel, online)) {
+    activeSeen[dev.id] = Date.now();
+    try { localStorage.setItem('activeSeen', JSON.stringify(activeSeen)); } catch(e){}
+    return true;
+  }
+  return !!(activeSeen[dev.id] && (Date.now() - activeSeen[dev.id] < ACTIVE_STICK_MS));
+}
 
 function renderCards(devs) {
   const list = document.getElementById('list');
@@ -251,7 +264,7 @@ function renderCards(devs) {
                    : (tv(tel,'can.fuel.level') != null ? tv(tel,'can.fuel.level')+' %' : '—'));
     const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
-    const active = isActive(tel, online);
+    const active = displayActive(d, tel, online);
     if (active) { nActive++; delete standingCache[d.id]; }   // поки в роботі — скидаємо кеш простою
     else nStopped++;                                         // усе інше (зокрема офлайн) — «стоять»
     const spdTxt = (spd != null && spd >= 3) ? Math.round(spd) + ' км/г'
@@ -358,7 +371,7 @@ function renderMap(devs) {
     const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
     if (lat == null || lon == null || tv(tel,'position.valid') === false) continue;  // нема валідного фіксу → не стрибаємо в Перу, маркер лишається на останній валідній точці
     const online = statusOnline(tel);
-    const active = isActive(tel, online);
+    const active = displayActive(d, tel, online);
     const liters = fuelLiters(d, tel);
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
