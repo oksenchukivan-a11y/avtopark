@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v23';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v24';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 30000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -262,8 +262,11 @@ function renderCards(devs) {
       ? `<div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--dim);flex-wrap:wrap">${diag.map(x=>`<span>${x}</span>`).join('')}</div>`
       : '';
     // де стоїть (адреса) — лише для незадіяних на звʼязку
-    const showLoc = !active && lat != null && lon != null;   // де стоїть — і для офлайн (остання відома точка)
-    const locHtml = showLoc ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>` : '';
+    const posValid = tv(tel,'position.valid') !== false;     // валідний GPS-фікс (не дефолтна точка Перу)
+    const showLoc = !active && lat != null && lon != null && posValid;
+    const locHtml = showLoc
+      ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
+      : ((!active && lat != null && lon != null && !posValid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу</div>` : '');
     // тривога: помилки двигуна / перегрів — щоб проблемне авто було видно одразу
     const et = engineTemp(tel), dtc = dtcCount(tel);
     const alerts = [];
@@ -346,7 +349,7 @@ function renderMap(devs) {
   for (const d of devs) {
     const tel = d.telemetry || {};
     const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
-    if (lat == null || lon == null) continue;
+    if (lat == null || lon == null || tv(tel,'position.valid') === false) continue;  // нема валідного фіксу → не стрибаємо в Перу, маркер лишається на останній валідній точці
     const online = statusOnline(tel);
     const active = isActive(tel, online);
     const liters = fuelLiters(d, tel);
@@ -572,7 +575,7 @@ function openDetail(d) {
   const tel = d.telemetry || {};
   const liters = fuelLiters(d, tel);
   const odo = tv(tel,'can.vehicle.mileage');
-  const range = tv(tel,'can.vehicle.remaining.range');
+  const range = rangeKm(tel);   // очищене від глюків (47704 → приховано)
   const tank = tankFor(d);
   const ev = evBatt(tel);
   const volt = vehVolt(tel), tb = trkBatt(tel), gsm = gsmInfo(tel), sats = satCount(tel);
