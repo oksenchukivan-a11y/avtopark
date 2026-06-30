@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v33';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v34';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -253,17 +253,20 @@ function statusOnline(tel) {
 //   1) бортова напруга ≥13В — генератор/DC-DC заряджає → заведено (універсально, всі авто й електрички)
 //   2) оберти двигуна >0 (ДВЗ)   3) запалювання=true (резерв, де дріт підключено)
 // Рух/швидкість НЕ використовуємо — РЕБ створює фейковий рух і телепорт.
-function isActive(tel, online) {
+function isActive(dev, tel, online) {
   // Авто ЗАДІЯНЕ, якщо є хоч один надійний (РЕБ-стійкий) сигнал:
-  //   1) бортова напруга ≥13В — генератор/DC-DC заряджає (оновлюється щомиті)
+  //   1) бортова напруга ≥13В — генератор заряджає (лише ДВЗ! для електрички НЕ беремо — див. нижче)
   //   2) запалювання=true (де OBD його віддає)
   //   3) ПІДТВЕРДЖЕНИЙ реальний рух — для авто, що не дають сигналів двигуна (як Renault Kangoo 8440,
   //      який віддає лише VIN+одометр). Рух «підтверджений» = швидкість + ВАЛІДНИЙ GPS-фікс + багато
   //      супутників → це НЕ РЕБ-телепорт (той дає невалідний фікс / мало супутників / стрибок).
   // RPM не беремо — у телеметрії «застрягає» на старому значенні.
   if (!online) return false;
+  // ЕЛЕКТРИЧКА: її 12В-шину DC-DC перетворювач тримає на 13В навіть ЗАГЛУШЕНОЮ → напруга НЕ ознака роботи.
+  // Для електрички задіяність = лише запалювання або реальний рух.
+  const isEV = !!(dev && dev.metadata && (dev.metadata.ev || dev.metadata.evRangeFull));
   const volt = tv(tel,'external.powersource.voltage');
-  if (volt != null && volt >= 13.0) return true;
+  if (!isEV && volt != null && volt >= 13.0) return true;
   if (tv(tel,'engine.ignition.status') === true) return true;
   const spd = tv(tel,'position.speed'), valid = tv(tel,'position.valid'), sats = tv(tel,'position.satellites');
   // підтверджений рух: швидкість + фікс не «невалідний» + достатньо супутників (не РЕБ-телепорт)
@@ -276,7 +279,7 @@ const ACTIVE_STICK_MS = 240000;
 let activeSeen = {};
 try { activeSeen = JSON.parse(localStorage.getItem('activeSeen') || '{}'); } catch(e) { activeSeen = {}; }
 function displayActive(dev, tel, online) {
-  if (isActive(tel, online)) {
+  if (isActive(dev, tel, online)) {
     activeSeen[dev.id] = Date.now();
     try { localStorage.setItem('activeSeen', JSON.stringify(activeSeen)); } catch(e){}
     return true;
@@ -698,7 +701,7 @@ function openDetail(d) {
     <div id="periodOut"><div class="spinner">…</div></div>`;
 
   // простій у деталях (асинхронно)
-  const dOnline = statusOnline(tel), dActive = isActive(tel, dOnline);
+  const dOnline = statusOnline(tel), dActive = isActive(d, tel, dOnline);
   const dstEl = document.getElementById('dst');
   if (dstEl) {
     if (dActive) dstEl.textContent = 'в роботі';
