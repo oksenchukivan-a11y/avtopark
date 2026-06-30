@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v31';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v32';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -100,19 +100,47 @@ function tankFor(x) {
 }
 
 // ===== Паливо у літрах =====
+// памʼять останнього відомого палива (деякі авто, як Ducato, перестають слати рівень коли заглушені → 0/нема)
+let lastFuel = {};
+try { lastFuel = JSON.parse(localStorage.getItem('lastFuel') || '{}'); } catch(e) { lastFuel = {}; }
 function fuelLiters(dev, tel) {
   const md = (dev && typeof dev === 'object' && dev.metadata) || {};
+  const id = dev && dev.id;
   const pct = tv(tel, 'can.fuel.level');       // рівень палива, %
   const tank = tankFor(dev);
-  // КАЛІБРУВАННЯ: якщо OEM-літри для цього авто ненадійні (metadata.fuelByPct=true) —
-  // рахуємо точно: % × реальний бак (для Renault Kangoo 8440, де can.fuel.volume бреше)
-  if (md.fuelByPct && pct != null && tank) return Math.round(pct / 100 * tank);
-  const direct = tv(tel, 'fuel.liters');       // плагін (літри)
-  if (direct != null) return Math.round(direct);
-  const vol = tv(tel, 'can.fuel.volume');      // деякі авто (Master) дають реальні літри напряму
-  // КАЛІБРУВАННЯ: множник з реального експерименту заправки (metadata.fuelFactor), якщо датчик недо/перераховує
-  if (vol != null && vol > 0) return Math.round(vol * (md.fuelFactor || 1));
-  if (pct != null && tank) return Math.round(pct / 100 * tank);   // решта: % × бак
+  let result = null;
+  // КАЛІБРУВАННЯ: якщо OEM-літри ненадійні (metadata.fuelByPct) — рахуємо % × реальний бак (Kangoo 8440)
+  if (md.fuelByPct && pct != null && tank) {
+    result = Math.round(pct / 100 * tank);
+  } else {
+    const direct = tv(tel, 'fuel.liters');     // плагін (літри)
+    const vol = tv(tel, 'can.fuel.volume');    // реальні літри напряму (Master/Ducato при русі)
+    if (direct != null) result = Math.round(direct);
+    else if (vol != null && vol > 0) result = Math.round(vol * (md.fuelFactor || 1));   // множник калібрування
+    else if (pct != null && tank && pct > 0) result = Math.round(pct / 100 * tank);
+  }
+  // якщо поточне читання осмислене — запамʼятовуємо
+  if (result != null && result > 0) {
+    if (id) { lastFuel[id] = result; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} }
+    return result;
+  }
+  // поточне 0/нема (авто заглушене не шле паливо) — показуємо ОСТАННЄ ВІДОМЕ
+  if (id && lastFuel[id] != null) return lastFuel[id];
+  return result;
+}
+// останнє осмислене паливо з ІСТОРІЇ (коли авто заглушене й не шле поточне — як Ducato)
+async function lastValidFuel(dev){
+  const now = Math.floor(Date.now()/1000);
+  const data = encodeURIComponent(JSON.stringify({ from: now-30*86400, to: now, count:1, reverse:true, filter:'can.fuel.volume', fields:'timestamp,can.fuel.volume' }));
+  try {
+    const res = await api(`/gw/devices/${dev.id}/messages?data=${data}`);
+    if (res && res.length && res[0]['can.fuel.volume'] > 0) {
+      const md = dev.metadata || {};
+      const l = Math.round(res[0]['can.fuel.volume'] * (md.fuelFactor || 1));
+      lastFuel[dev.id] = l; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){}
+      return l;
+    }
+  } catch(e){}
   return null;
 }
 
@@ -319,7 +347,7 @@ function renderCards(devs) {
         <span class="badge" style="margin:0;${active?'color:#2ecc71':''}">${active?'🟢 в роботі':(lastTs?ago(lastTs):'')}</span>
       </div>
       <div class="grid">
-        <div class="cell"><div class="v fuel">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
+        <div class="cell"><div class="v fuel" id="fuel_${d.id}">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
         <div class="cell"><div class="v" id="dm_${d.id}">…</div><div class="l">за сьогодні</div></div>
         <div class="cell"><div class="v">${spdTxt}</div><div class="l">${odoTxt}</div></div>
       </div>${infoHtml}${diagHtml}${locHtml}${alertHtml}`;
@@ -329,6 +357,13 @@ function renderCards(devs) {
       const el = document.getElementById('dm_' + d.id);
       if (el) el.textContent = (km != null ? km + ' км' : '—');
     }).catch(()=>{ const el=document.getElementById('dm_'+d.id); if(el) el.textContent='—'; });
+
+    if (liters == null && ev.soc == null) {   // паливо невідоме і не електро → підвантажуємо останнє з історії (Ducato)
+      lastValidFuel(d).then(l => {
+        const el = document.getElementById('fuel_' + d.id);
+        if (el && l != null) el.textContent = l + ' л';
+      }).catch(()=>{});
+    }
 
     if (!active) {
       standingText(d.id).then(txt => {
