@@ -2,6 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
+const APP_VERSION = 'v23';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 30000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -193,7 +194,7 @@ async function loadDevices() {
   devCache = devs;
   renderCards(devs);
   renderMap(devs);
-  document.getElementById('updated').textContent = 'оновлено ' + new Date().toLocaleTimeString('uk-UA');
+  document.getElementById('updated').textContent = 'оновлено ' + new Date().toLocaleTimeString('uk-UA') + ' · ' + APP_VERSION;
 }
 
 function statusOnline(tel) {
@@ -752,8 +753,17 @@ function init() {
   startLoop();
 }
 
+// АВТО-ОНОВЛЕННЯ: завжди тягнемо свіжий sw.js (без кешу браузера), і коли нова версія
+// бере контроль — застосунок сам перезавантажується зі свіжим кодом. Кінець «застряглому кешу».
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(()=>{});
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    reg.update();
+    setInterval(() => reg.update(), 60000);   // перевірка оновлень щохвилини
+  }).catch(()=>{});
+  let swReloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swReloading) return; swReloading = true; location.reload();
+  });
 }
 
 init();
