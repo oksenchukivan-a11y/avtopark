@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v29';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v30';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -195,6 +195,8 @@ function markerFor(dev, latlon, online, active) {
 
 // ===== Список + головна мапа =====
 let map, layersCtl, markers = {}, devCache = [];
+let lastValidPos = {};   // остання ВАЛІДНА позиція кожного авто — щоб не зникали з карти й не стрибали в Перу
+try { lastValidPos = JSON.parse(localStorage.getItem('lastValidPos') || '{}'); } catch(e) { lastValidPos = {}; }
 
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
@@ -371,8 +373,15 @@ function renderMap(devs) {
   const pts = [];
   for (const d of devs) {
     const tel = d.telemetry || {};
-    const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
-    if (lat == null || lon == null || tv(tel,'position.valid') === false) continue;  // нема валідного фіксу → не стрибаємо в Перу, маркер лишається на останній валідній точці
+    let lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
+    const valid = tv(tel,'position.valid');
+    if (lat != null && lon != null && valid !== false) {
+      lastValidPos[d.id] = [lat, lon];                              // свіжа валідна точка — запамʼятовуємо
+      try { localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos)); } catch(e){}
+    } else if (lastValidPos[d.id]) {
+      lat = lastValidPos[d.id][0]; lon = lastValidPos[d.id][1];     // нема фіксу → показуємо ОСТАННЮ ВІДОМУ (не Перу, не зникає)
+    }
+    if (lat == null || lon == null) continue;                       // позиції ще ніколи не було
     const online = statusOnline(tel);
     const active = displayActive(d, tel, online);
     const liters = fuelLiters(d, tel);
