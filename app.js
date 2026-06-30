@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v30';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v31';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -141,7 +141,11 @@ function vehicleRange(dev, tel){
   const md = (dev && typeof dev === 'object' && dev.metadata) || {};
   const soc = tv(tel,'can.vehicle.battery.level');
   if (soc != null && md.evRangeFull) return Math.round(soc / 100 * md.evRangeFull);   // електро: заряд% × повний запас
-  return rangeKm(tel);   // ДВЗ: сирий запас (без глюків)
+  const r = rangeKm(tel);
+  if (r != null) return r;                                                            // CAN-запас авто (де віддає, без глюків)
+  const liters = fuelLiters(dev, tel);                                               // ДВЗ без CAN-запасу: оцінка літри × км/л
+  if (liters != null) return Math.round(liters * (md.kmPerLiter || 10));
+  return null;
 }
 // EV-батарея (тягова) — для електричок
 function evBatt(tel){
@@ -175,15 +179,11 @@ function vehIcon(dev, online, active) {
   const color = m.color || '#3aa0ff';
   const icon = m.icon || '🚗';
   const dim = online ? 1 : 0.55;
-  const inner = '<div style="opacity:'+dim+';background:'+color+';border:2px solid #fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.55)">'+icon+'</div>';
-  if (active) {
-    // помітне зелене кільце-ореол навколо машини, що в роботі
-    const html = '<div style="position:relative;width:46px;height:46px;display:flex;align-items:center;justify-content:center">'
-      + '<div style="position:absolute;inset:0;border-radius:50%;border:3px solid #2ecc71;box-shadow:0 0 12px 4px rgba(46,204,113,.95),inset 0 0 6px rgba(46,204,113,.6)"></div>'
-      + inner + '</div>';
-    return L.divIcon({ className:'', html, iconSize:[46,46], iconAnchor:[23,23] });
-  }
-  return L.divIcon({ className:'', html: inner, iconSize:[30,30], iconAnchor:[15,15] });
+  // кантик навколо машинки: БІЛИЙ коли стоїть, ЗЕЛЕНИЙ коли в роботі (той самий розмір — лише колір рамки + легке сяйво)
+  const border = active ? '3px solid #2ecc71' : '2px solid #fff';
+  const glow = active ? ',0 0 8px 2px rgba(46,204,113,.85)' : '';
+  const html = '<div style="opacity:'+dim+';background:'+color+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+icon+'</div>';
+  return L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
 }
 function markerFor(dev, latlon, online, active) {
   const m = dev.metadata || {};
