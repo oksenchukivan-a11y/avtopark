@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v32';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v33';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -128,19 +128,25 @@ function fuelLiters(dev, tel) {
   if (id && lastFuel[id] != null) return lastFuel[id];
   return result;
 }
-// останнє осмислене паливо з ІСТОРІЇ (коли авто заглушене й не шле поточне — як Ducato)
+// останнє осмислене паливо з ІСТОРІЇ (коли авто заглушене й шле 0/нема — як Ducato).
+// Шукаємо останнє >0 серед can.fuel.volume (літри) АБО can.fuel.level (% × бак), пропускаючи нулі-глюки.
 async function lastValidFuel(dev){
+  const md = dev.metadata || {};
+  const tank = md.tank || (TANKS[dev.id] && TANKS[dev.id].tank) || null;
   const now = Math.floor(Date.now()/1000);
-  const data = encodeURIComponent(JSON.stringify({ from: now-30*86400, to: now, count:1, reverse:true, filter:'can.fuel.volume', fields:'timestamp,can.fuel.volume' }));
-  try {
-    const res = await api(`/gw/devices/${dev.id}/messages?data=${data}`);
-    if (res && res.length && res[0]['can.fuel.volume'] > 0) {
-      const md = dev.metadata || {};
-      const l = Math.round(res[0]['can.fuel.volume'] * (md.fuelFactor || 1));
-      lastFuel[dev.id] = l; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){}
-      return l;
-    }
-  } catch(e){}
+  for (const field of ['can.fuel.volume','can.fuel.level']) {
+    const data = encodeURIComponent(JSON.stringify({ from: now-30*86400, to: now, count:50, reverse:true, filter:field, fields:'timestamp,'+field }));
+    try {
+      const res = await api(`/gw/devices/${dev.id}/messages?data=${data}`);
+      if (res) for (const m of res) {
+        const v = m[field];
+        if (v != null && v > 0) {
+          const l = (field === 'can.fuel.level') ? (tank ? Math.round(v/100*tank) : null) : Math.round(v * (md.fuelFactor || 1));
+          if (l != null) { lastFuel[dev.id] = l; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} return l; }
+        }
+      }
+    } catch(e){}
+  }
   return null;
 }
 
