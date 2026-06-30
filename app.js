@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v28';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v29';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -205,9 +205,12 @@ async function loadDevices() {
 }
 
 function statusOnline(tel) {
+  // ВАЖЛИВО: у масовому запиті /devices/all параметри — ПЛОСКІ значення без часових міток (ts).
+  // Тому беремо server.timestamp як ЗНАЧЕННЯ (tv), а не через tts. Інакше всі авто хибно «offline».
+  const st = tv(tel, 'server.timestamp');
+  if (st != null) return (Date.now()/1000 - st) < ONLINE_SEC;
   const ts = tts(tel, 'position') || tts(tel, 'can.vehicle.mileage') || tts(tel, 'can.fuel.level');
-  if (!ts) return false;
-  return (Date.now()/1000 - ts) < ONLINE_SEC;
+  return ts ? (Date.now()/1000 - ts) < ONLINE_SEC : false;
 }
 // авто ЗАДІЯНЕ = свіжі дані + двигун/авто УВІМКНЕНЕ.
 // Сигнали беремо з електрики/CAN авто (РЕБ-стійкі, бо НЕ залежать від GPS):
@@ -255,7 +258,7 @@ function renderCards(devs) {
     const odo = tv(tel, 'can.vehicle.mileage');
     const spd = tv(tel, 'position.speed');
     const online = statusOnline(tel);
-    const lastTs = tts(tel, 'position') || tts(tel, 'can.vehicle.mileage');
+    const lastTs = tv(tel,'server.timestamp') || tts(tel, 'position') || tts(tel, 'can.vehicle.mileage');
     const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
 
     const ev = evBatt(tel);
