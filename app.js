@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v24';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v25';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 30000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -136,6 +136,13 @@ function voltHealth(v){   // оцінка стану 12В акумулятора
 }
 // запас ходу з відсіканням глюків (датчик інколи віддає абсурд типу 47722 км)
 function rangeKm(tel){ const r = tv(tel,'can.vehicle.remaining.range'); return (r != null && r > 0 && r <= 1500) ? Math.round(r) : null; }
+// запас з адаптацією під ЗАРЯД для електричок (датчик авто застрягає на постійному значенні — як Kangoo Z.E. = 185 при будь-якому %)
+function vehicleRange(dev, tel){
+  const md = (dev && typeof dev === 'object' && dev.metadata) || {};
+  const soc = tv(tel,'can.vehicle.battery.level');
+  if (soc != null && md.evRangeFull) return Math.round(soc / 100 * md.evRangeFull);   // електро: заряд% × повний запас
+  return rangeKm(tel);   // ДВЗ: сирий запас (без глюків)
+}
 // EV-батарея (тягова) — для електричок
 function evBatt(tel){
   return {
@@ -274,7 +281,7 @@ function renderCards(devs) {
     if (et != null && et >= 110) alerts.push(`🌡️ перегрів ${Math.round(et)}°C`);
     const alertHtml = alerts.length ? `<div style="margin-top:6px;font-size:12px;color:#e74c3c;font-weight:700">${alerts.join(' · ')}</div>` : '';
     // до ТО + запас ходу (цінне для користувача — на видноті в картці)
-    const sk = serviceKm(tel), rng = rangeKm(tel);
+    const sk = serviceKm(tel), rng = vehicleRange(d, tel);
     const infoArr = [];
     if (sk != null) infoArr.push(`🔧 ${Math.round(sk).toLocaleString('uk-UA')} км до ТО`);
     if (rng != null) infoArr.push(`🛣️ ${rng.toLocaleString('uk-UA')} км запас`);
@@ -575,7 +582,7 @@ function openDetail(d) {
   const tel = d.telemetry || {};
   const liters = fuelLiters(d, tel);
   const odo = tv(tel,'can.vehicle.mileage');
-  const range = rangeKm(tel);   // очищене від глюків (47704 → приховано)
+  const range = vehicleRange(d, tel);   // ДВЗ: очищено від глюків; електро: заряд% × повний запас
   const tank = tankFor(d);
   const ev = evBatt(tel);
   const volt = vehVolt(tel), tb = trkBatt(tel), gsm = gsmInfo(tel), sats = satCount(tel);
