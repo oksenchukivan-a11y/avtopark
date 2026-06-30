@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v27';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v28';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -774,6 +774,14 @@ function init() {
   setTimeout(() => { if (map) map.invalidateSize(); }, 200);
   refresh();
   startLoop();
+  // iOS-PWA: таймер оновлення «засинає» у фоні/при бездіяльності. Оновлюємо щоразу, коли
+  // застосунок знову зʼявляється на екрані або отримує фокус — щоб дані завжди свіжі коли дивишся.
+  if (!window._visHooked) {
+    window._visHooked = true;
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+    window.addEventListener('focus', refresh);
+    window.addEventListener('pageshow', refresh);
+  }
 }
 
 // АВТО-ОНОВЛЕННЯ: завжди тягнемо свіжий sw.js (без кешу браузера), і коли нова версія
