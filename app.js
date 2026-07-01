@@ -2,8 +2,9 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v38';          // показуємо в шапці — щоб видно було, що отримав свіже
-const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
+const APP_VERSION = 'v39';          // показуємо в шапці — щоб видно було, що отримав свіже
+const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
+const FAST_REFRESH_MS = 5000;       // поки хоч одне авто під РЕБ-глушінням — оновлюємось частіше, щоб миттєво зловити кінець глушіння
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
 const DRAIN_PCT = 4;               // падіння > 4% при зупинці = підозра на злив
@@ -145,8 +146,11 @@ function fuelCurrent(dev, tel) {
   const tank = tankFor(dev);
   // КАЛІБРУВАННЯ: якщо OEM-літри ненадійні (metadata.fuelByPct) — рахуємо % × реальний бак
   if (md.fuelByPct && pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank);
-  const direct = tv(tel, 'fuel.liters');       // плагін (літри)
-  if (direct != null) return Math.round(direct);
+  // ПРИМІТКА: раніше тут був пріоритет для 'fuel.liters' (серверний плагін flespi msg-expression) —
+  // прибрано назавжди: на Kangoo 8440 висів застарілий плагін з часів тестування Audi (формула %×0.7,
+  // під 70-літровий бак), і мовчки перебивав правильний клієнтський розрахунок місяцями (показував 25 л
+  // замість реальних ~21 л). Калібрування тепер ЛИШЕ клієнтське (metadata.fuelFactor/fuelByPct/tank),
+  // без залежності від серверних плагінів, які легко забути відв'язати при зміні авто на пристрої.
   const vol = tv(tel, 'can.fuel.volume');      // реальні літри напряму (Master/Kangoo при русі)
   if (vol != null && vol > 0) return Math.round(vol * (md.fuelFactor || 1));   // множник калібрування
   if (pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank);
@@ -208,6 +212,17 @@ function rangeKm(tel){ const r = tv(tel,'can.vehicle.remaining.range'); return (
 // РЕБ-глушіння GPS (Teltonika AVL ID 318 «GNSS Jamming»): 0=нема, 1=попередження (сигнал ослаблений, фікс ще тримається), 2=критично (фікс неможливий).
 // Це офіційний індикатор глушіння з трекера — набагато точніший за здогад «просто нема фіксу довго» (могло виглядати як несправна антена).
 function gnssJamState(tel){ const s = tv(tel,'gnss.state.enum'); return (s === 1 || s === 2) ? s : 0; }
+// відколи авто під глушінням (щоб показувати «глушиться вже Х хв», а не просто статичний прапорець)
+let jamStartTs = {};
+try { jamStartTs = JSON.parse(localStorage.getItem('jamStartTs') || '{}'); } catch(e) { jamStartTs = {}; }
+function jamDuration(devId, jamState){
+  if (jamState > 0) {
+    if (!jamStartTs[devId]) { jamStartTs[devId] = Date.now(); try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){} }
+    return Date.now() - jamStartTs[devId];
+  }
+  if (jamStartTs[devId]) { delete jamStartTs[devId]; try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){} }
+  return 0;
+}
 // запас з адаптацією під ЗАРЯД для електричок (датчик авто застрягає на постійному значенні — як Kangoo Z.E. = 185 при будь-якому %)
 function vehicleRange(dev, tel){
   const md = (dev && typeof dev === 'object' && dev.metadata) || {};
@@ -383,10 +398,11 @@ function renderCards(devs) {
     const gpsLostMsC = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
     const gpsLostLong = !posValid && gpsLostMsC != null && gpsLostMsC > GPS_LOST_MS;
     const jam = gnssJamState(tel);
+    const jamMs = jamDuration(d.id, jam);
     const locHtml = showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
-      : (jam === 2 ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 GPS глушать (РЕБ) — сигнал відсутній</div>`
-      : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS ослаблений (можливе глушіння)</div>`
+      : (jam === 2 ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs/1000)} — сигнал відсутній</div>`
+      : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS ослаблений вже ${fmtDur(jamMs/1000)} (можливе глушіння)</div>`
       : (gpsLostLong ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
       : ((!active && lat != null && lon != null && !posValid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу</div>` : ''))));
     // тривога: помилки двигуна / перегрів — щоб проблемне авто було видно одразу
@@ -502,11 +518,12 @@ function renderMap(devs) {
     // GPS втрачено надовго — офіційний індикатор глушіння (РЕБ) з трекера має пріоритет над здогадом
     const gpsLostMs = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
     const jamState = gnssJamState(tel);
+    const jamMs2 = jamDuration(d.id, jamState);
     const gpsLost = jamState > 0 || (valid === false && gpsLostMs != null && gpsLostMs > GPS_LOST_MS);
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
-    const gpsWarn = jamState === 2 ? '<br>🚫 GPS глушать (РЕБ)'
-      : jamState === 1 ? '<br>⚠️ GPS ослаблений (можливе глушіння)'
+    const gpsWarn = jamState === 2 ? `<br>🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs2/1000)}`
+      : jamState === 1 ? `<br>⚠️ GPS ослаблений вже ${fmtDur(jamMs2/1000)}`
       : (gpsLost ? `<br>⚠️ GPS втрачено ${fmtDur(gpsLostMs/1000)} тому — точка застаріла` : '');
     const html = `<b>${d.name}</b><br>${status}${liters!=null?' · '+liters+' л':''}${gpsWarn}`;
     if (markers[d.id]) {
@@ -903,12 +920,16 @@ function closeDetail(){
 }
 
 // ===== Оновлення =====
+// Адаптивний інтервал: поки хоч одне авто під РЕБ-глушінням — оновлюємось частіше (FAST_REFRESH_MS),
+// щоб миттєво зловити момент, коли глушіння скінчиться, а не чекати до 15 секунд.
 let timer;
 async function refresh() {
   try { await loadDevices(); }
   catch(e){ document.getElementById('updated').textContent = 'помилка: ' + e.message; }
+  const anyJammed = devCache.some(d => gnssJamState(d.telemetry || {}) > 0);
+  timer = setTimeout(refresh, anyJammed ? FAST_REFRESH_MS : REFRESH_MS);
 }
-function startLoop(){ clearInterval(timer); timer = setInterval(refresh, REFRESH_MS); }
+function startLoop(){ clearTimeout(timer); timer = setTimeout(refresh, 0); }
 
 // ===== Старт =====
 function init() {
