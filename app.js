@@ -2,9 +2,10 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v41';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v42';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
-const FAST_REFRESH_MS = 5000;       // поки хоч одне авто під РЕБ-глушінням — оновлюємось частіше, щоб миттєво зловити кінець глушіння
+const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
+const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
 const DRAIN_PCT = 4;               // падіння > 4% при зупинці = підозра на злив
@@ -937,8 +938,14 @@ async function refresh() {
               : 'тимчасові негаразди зі звʼязком, спробую знову';
     document.getElementById('updated').textContent = '⚠️ ' + msg + ' · дані на екрані ще ' + APP_VERSION;
   }
-  const anyJammed = devCache.some(d => gnssJamState(d.telemetry || {}) > 0);
-  timer = setTimeout(refresh, anyJammed ? FAST_REFRESH_MS : REFRESH_MS);
+  // швидкий поллінг МАЄ СЕНС лише перші кілька хвилин глушіння (зловити швидке відновлення).
+  // Якщо глушіння регіональне й тримається годинами (як буває в Сумах) — 3x частіші запити годинами
+  // самі забивають ліміт flespi. Тому швидкий режим лише поки хоч одне авто глушиться МЕНШЕ ніж FAST_WINDOW_MS.
+  const jamSoon = devCache.some(d => {
+    const js = gnssJamState(d.telemetry || {});
+    return js > 0 && jamDuration(d.id, js) < FAST_WINDOW_MS;
+  });
+  timer = setTimeout(refresh, jamSoon ? FAST_REFRESH_MS : REFRESH_MS);
 }
 function startLoop(){ clearTimeout(timer); timer = setTimeout(refresh, 0); }
 
