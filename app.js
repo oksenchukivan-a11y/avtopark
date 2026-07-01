@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v39';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v40';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // поки хоч одне авто під РЕБ-глушінням — оновлюємось частіше, щоб миттєво зловити кінець глушіння
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
@@ -44,9 +44,14 @@ async function api(path, method, body) {
       const r = await fetch(FLESPI + path, opt);
       if (r.status === 401 || r.status === 403) throw new Error('AUTH');
       const txt = await r.text();
-      if (!txt) { last = 'empty'; continue; }
+      if (!txt) { last = 'empty'; await new Promise(res=>setTimeout(res, 800*(i+1))); continue; }
       const j = JSON.parse(txt);
-      if (j.errors) throw new Error(j.errors[0] && j.errors[0].reason || 'api');
+      if (j.errors) {
+        const reason = (j.errors[0] && j.errors[0].reason) || 'api';
+        // ліміт REST-запитів/хв — миттєвий ретрай лише погіршує ситуацію, чекаємо з нарощуванням паузи
+        if (/limit/i.test(reason)) { last = reason; await new Promise(res=>setTimeout(res, 1500*(i+1))); continue; }
+        throw new Error(reason);
+      }
       return j.result;
     } catch (e) {
       if (e.message === 'AUTH') { alert('Токен недійсний'); logout(); throw e; }
