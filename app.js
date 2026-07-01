@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v35';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v36';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 30 с
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
@@ -209,21 +209,22 @@ async function rebootTracker(id) {
 
 // ===== Іконка машини на карті (з метаданих) =====
 // active = двигун у роботі → зелений світний обідок (колір машини для впізнавання лишається)
-function vehIcon(dev, online, active) {
+function vehIcon(dev, online, active, gpsLost) {
   const m = dev.metadata || {};
   const color = m.color || '#3aa0ff';
   const icon = m.icon || '🚗';
   const dim = online ? 1 : 0.55;
-  // кантик навколо машинки: БІЛИЙ коли стоїть, ЗЕЛЕНИЙ коли в роботі (той самий розмір — лише колір рамки + легке сяйво)
-  const border = active ? '3px solid #2ecc71' : '2px solid #fff';
-  const glow = active ? ',0 0 8px 2px rgba(46,204,113,.85)' : '';
-  const html = '<div style="opacity:'+dim+';background:'+color+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+icon+'</div>';
+  // кантик навколо машинки: БІЛИЙ коли стоїть, ЗЕЛЕНИЙ коли в роботі, ЖОВТИЙ пунктир — GPS втрачено надовго (точка застаріла)
+  const border = gpsLost ? '3px dashed #f39c12' : (active ? '3px solid #2ecc71' : '2px solid #fff');
+  const glow = gpsLost ? ',0 0 8px 2px rgba(243,156,18,.85)' : (active ? ',0 0 8px 2px rgba(46,204,113,.85)' : '');
+  const badge = gpsLost ? '<div style="position:absolute;top:-4px;right:-4px;font-size:12px">⚠️</div>' : '';
+  const html = '<div style="position:relative;opacity:'+dim+'"><div style="background:'+color+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+icon+'</div>'+badge+'</div>';
   return L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
 }
-function markerFor(dev, latlon, online, active) {
+function markerFor(dev, latlon, online, active, gpsLost) {
   const m = dev.metadata || {};
   const short = m.short || dev.name || '';
-  const mk = L.marker(latlon, { icon: vehIcon(dev, online, active) });
+  const mk = L.marker(latlon, { icon: vehIcon(dev, online, active, gpsLost) });
   mk.bindTooltip(short, { permanent:true, direction:'right', offset:[16,0], className:'veh-label' });
   return mk;
 }
@@ -232,6 +233,20 @@ function markerFor(dev, latlon, online, active) {
 let map, layersCtl, markers = {}, devCache = [];
 let lastValidPos = {};   // остання ВАЛІДНА позиція кожного авто — щоб не зникали з карти й не стрибали в Перу
 try { lastValidPos = JSON.parse(localStorage.getItem('lastValidPos') || '{}'); } catch(e) { lastValidPos = {}; }
+let lastValidPosTs = {};   // коли саме був той останній валідний фікс — щоб бачити "GPS втрачено Х год тому"
+try { lastValidPosTs = JSON.parse(localStorage.getItem('lastValidPosTs') || '{}'); } catch(e) { lastValidPosTs = {}; }
+// чистка «зомбі»-позицій: якщо валідного фіксу не було 30+ днів — забуваємо (нема сенсу показувати місяцями стару точку)
+{
+  const cutoff = Date.now() - 30*86400000;
+  for (const id of Object.keys(lastValidPosTs)) {
+    if (lastValidPosTs[id] < cutoff) { delete lastValidPosTs[id]; delete lastValidPos[id]; }
+  }
+  try {
+    localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
+    localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
+  } catch(e){}
+}
+const GPS_LOST_MS = 20 * 60 * 1000;   // якщо валідного фіксу нема довше 20 хв — це вже не «дрижання», а реальна проблема (антена/апаратура)
 
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
@@ -270,8 +285,9 @@ function isActive(dev, tel, online) {
   if (!isEV && volt != null && volt >= 13.0) return true;
   if (tv(tel,'engine.ignition.status') === true) return true;
   const spd = tv(tel,'position.speed'), valid = tv(tel,'position.valid'), sats = tv(tel,'position.satellites');
-  // підтверджений рух: швидкість + фікс не «невалідний» + достатньо супутників (не РЕБ-телепорт)
-  if (spd != null && spd >= 3 && spd < 150 && valid !== false && (sats == null || sats >= 4)) return true;
+  // підтверджений рух: швидкість + фікс не «невалідний» + ЯВНО достатньо супутників (не РЕБ-телепорт).
+  // sats обовʼязково число ≥4 — GPS-елемент AVL завжди його шле, тому null тут теж підозріло (не довіряємо).
+  if (spd != null && spd >= 3 && spd < 150 && valid !== false && sats != null && sats >= 4) return true;
   return false;
 }
 // ЛИПКІСТЬ: раз авто було активне — лишається «в роботі» ще 4 хв (зглажує світлофори, короткі
@@ -302,9 +318,8 @@ function renderCards(devs) {
     const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
 
     const ev = evBatt(tel);
-    const fuelTxt = ev.soc != null ? Math.round(ev.soc) + ' %'
-                   : (liters != null ? liters + ' л'
-                   : (tv(tel,'can.fuel.level') != null ? tv(tel,'can.fuel.level')+' %' : '—'));
+    // ЗАВЖДИ через fuelLiters() (кеш+історія) — сирий can.fuel.level в обхід кешу міг «залипати» на застарілому значенні
+    const fuelTxt = ev.soc != null ? Math.round(ev.soc) + ' %' : (liters != null ? liters + ' л' : '—');
     const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
     const active = displayActive(d, tel, online);
@@ -327,9 +342,13 @@ function renderCards(devs) {
     // де стоїть (адреса) — лише для незадіяних на звʼязку
     const posValid = tv(tel,'position.valid') !== false;     // валідний GPS-фікс (не дефолтна точка Перу)
     const showLoc = !active && lat != null && lon != null && posValid;
+    // GPS втрачено надовго — не просто «нема фіксу», а ЯВНЕ попередження зі скільки часу (антена/апаратна проблема)
+    const gpsLostMsC = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
+    const gpsLostLong = !posValid && gpsLostMsC != null && gpsLostMsC > GPS_LOST_MS;
     const locHtml = showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
-      : ((!active && lat != null && lon != null && !posValid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу</div>` : '');
+      : (gpsLostLong ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
+      : ((!active && lat != null && lon != null && !posValid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу</div>` : ''));
     // тривога: помилки двигуна / перегрів — щоб проблемне авто було видно одразу
     const et = engineTemp(tel), dtc = dtcCount(tel);
     const alerts = [];
@@ -382,7 +401,7 @@ function renderCards(devs) {
     }
 
     if (!active) {
-      standingText(d.id).then(txt => {
+      standingText(d).then(txt => {
         const el = document.getElementById('st_' + d.id);
         if (el) el.textContent = txt;
       }).catch(()=>{ const el=document.getElementById('st_'+d.id); if(el) el.textContent='—'; });
@@ -428,7 +447,11 @@ function renderMap(devs) {
     const valid = tv(tel,'position.valid');
     if (lat != null && lon != null && valid !== false) {
       lastValidPos[d.id] = [lat, lon];                              // свіжа валідна точка — запамʼятовуємо
-      try { localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos)); } catch(e){}
+      lastValidPosTs[d.id] = Date.now();
+      try {
+        localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
+        localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
+      } catch(e){}
     } else if (lastValidPos[d.id]) {
       lat = lastValidPos[d.id][0]; lon = lastValidPos[d.id][1];     // нема фіксу → показуємо ОСТАННЮ ВІДОМУ (не Перу, не зникає)
     }
@@ -436,15 +459,19 @@ function renderMap(devs) {
     const online = statusOnline(tel);
     const active = displayActive(d, tel, online);
     const liters = fuelLiters(d, tel);
+    // GPS втрачено надовго (не просто дрижання сигналу, а реальна проблема — антена/апаратура/укриття)
+    const gpsLostMs = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
+    const gpsLost = valid === false && gpsLostMs != null && gpsLostMs > GPS_LOST_MS;
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
-    const html = `<b>${d.name}</b><br>${status}${liters!=null?' · '+liters+' л':''}`;
+    const gpsWarn = gpsLost ? `<br>⚠️ GPS втрачено ${fmtDur(gpsLostMs/1000)} тому — точка застаріла` : '';
+    const html = `<b>${d.name}</b><br>${status}${liters!=null?' · '+liters+' л':''}${gpsWarn}`;
     if (markers[d.id]) {
       markers[d.id].setLatLng([lat,lon]);
-      markers[d.id].setIcon(vehIcon(d, online, active));   // оновлюємо обідок (завівся / заглушив)
+      markers[d.id].setIcon(vehIcon(d, online, active, gpsLost));   // оновлюємо обідок (завівся / заглушив / GPS втрачено)
       const pp = markers[d.id].getPopup(); if (pp) pp.setContent(html);
     } else {
-      markers[d.id] = markerFor(d, [lat,lon], online, active).addTo(map).bindPopup(html);
+      markers[d.id] = markerFor(d, [lat,lon], online, active, gpsLost).addTo(map).bindPopup(html);
     }
   }
   if (pts.length && !map._fitted) { map.fitBounds(pts, { padding:[40,40], maxZoom:13 }); map._fitted = true; }
@@ -490,32 +517,34 @@ function fmtStanding(sec){
   if (h > 0) return `${h} год ${m} хв`;
   return `${m} хв`;
 }
-async function lastActiveInfo(id){
+async function lastActiveInfo(id, isEV){
   const now = Math.floor(Date.now()/1000);
-  // активність = двигун/авто було увімкнене: напруга ≥13В АБО оберти>0 АБО запалювання=true (РЕБ-стійко, без руху).
+  // активність = двигун/авто було увімкнене: напруга ≥13В (НЕ для електро — DC-DC тримає 13В і заглушеною)
+  // АБО запалювання=true АБО ПІДТВЕРДЖЕНИЙ рух (швидкість + валідний фікс + достатньо супутників, не РЕБ-телепорт).
   // тир 1 — недавні повідомлення (для щоденних авто знайде швидко й дешево); тир 2 — глибше, якщо стоїть давно
   for (const pair of [[400,3],[3000,45]]) {
     const cnt = pair[0], days = pair[1];
-    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,external.powersource.voltage,engine.ignition.status,position.speed,position.valid' }));
+    const data = encodeURIComponent(JSON.stringify({ from: now-days*86400, to: now, count: cnt, reverse: true, fields:'timestamp,external.powersource.voltage,engine.ignition.status,position.speed,position.valid,position.satellites' }));
     let msgs;
     try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e){ return null; }
     for (const m of msgs) {
       const v = m['external.powersource.voltage'], ig = m['engine.ignition.status'];
-      const sp = m['position.speed'], vd = m['position.valid'];
-      if ((v != null && v >= 13.0) || ig === true || (sp != null && sp >= 5 && vd !== false)) return { ts: m.timestamp, found: true };
+      const sp = m['position.speed'], vd = m['position.valid'], sa = m['position.satellites'];
+      if ((!isEV && v != null && v >= 13.0) || ig === true || (sp != null && sp >= 5 && vd !== false && sa != null && sa >= 4)) return { ts: m.timestamp, found: true };
     }
     if (cnt > 1000 && msgs.length) return { ts: msgs[msgs.length-1].timestamp, found: false };  // увімкнення у вікні нема → «принаймні стільки»
   }
   return null;
 }
 // повертає готовий текст: «2 год 15 хв» або «≥ 1 год» (коли немає давнішої історії)
-async function standingText(id){
+async function standingText(dev){
+  const id = dev.id, isEV = !!(dev.metadata && (dev.metadata.ev || dev.metadata.evRangeFull));
   const now = Math.floor(Date.now()/1000);
   let ts, atLeast;
   const c = standingCache[id];
   if (c && (Date.now()-c.at) < 1800000) { ts = c.ts; atLeast = c.atLeast; }   // кеш 30 хв (момент простою фіксований)
   else {
-    const info = await lastActiveInfo(id);
+    const info = await lastActiveInfo(id, isEV);
     ts = info ? info.ts : null;
     atLeast = info ? !info.found : false;
     standingCache[id] = { ts, at: Date.now(), atLeast };
@@ -545,8 +574,8 @@ function geocode(lat, lon){
       let txt = road ? (road + num) : place;
       if (road && place && place !== road) txt = road + num + ', ' + place;
       if (!txt) txt = (j.display_name || '').split(',').slice(0,2).join(',').trim();
-      geoCache[key] = txt || '';
-      try { localStorage.setItem('geoCache', JSON.stringify(geoCache)); } catch(e){}
+      // кешуємо ЛИШЕ вдалий результат — порожнє/помилку не запамʼятовуємо назавжди, спробуємо ще раз наступного разу
+      if (txt) { geoCache[key] = txt; try { localStorage.setItem('geoCache', JSON.stringify(geoCache)); } catch(e){} }
     } catch(e) { /* помилку не кешуємо — спробуємо іншим разом */ }
     await new Promise(res => setTimeout(res, 1100));   // пауза під ліміт Nominatim (1/сек)
   });
@@ -621,6 +650,8 @@ async function periodReport(id, from, to) {
     // паливо в літрах: з can.fuel.volume напряму (Master), або can.fuel.level% × бак (Audi)
     let flv = m['can.fuel.volume'];
     if ((flv == null || flv <= 0) && m['can.fuel.level'] != null && tank) flv = m['can.fuel.level']/100*tank;
+    // глюк-фільтр: паливо не може бути більшим за бак (запас ходу теж «бреше» — той самий клас сенсорного сміття)
+    if (flv != null && tank && flv > tank * 1.15) flv = null;
     if (flv != null && flv > 0) {
       if (firstFuel == null) firstFuel = flv;
       lastFuel = flv;
@@ -666,7 +697,7 @@ function openDetail(d) {
   // головна цифра: для електрички — заряд+SoH, для решти — паливо
   const firstBig = ev.soc != null
     ? `<div><div class="big" style="color:var(--green)">${Math.round(ev.soc)} %</div><div class="l" style="color:var(--dim);font-size:12px">заряд батареї${ev.soh!=null?` · SoH ${Math.round(ev.soh)}%`:''}</div></div>`
-    : `<div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':(tv(tel,'can.fuel.level')!=null?tv(tel,'can.fuel.level')+' %':'—')}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${tank?` (бак ${tank} л)`:''}</div></div>`;
+    : `<div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':'—'}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${tank?` (бак ${tank} л)`:''}</div></div>`;
 
   const diagBlock = `
     <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:10px">
@@ -713,7 +744,7 @@ function openDetail(d) {
   if (dstEl) {
     if (dActive) dstEl.textContent = 'в роботі';
     else if (!dOnline) dstEl.textContent = '—';
-    else standingText(d.id).then(txt => { if (dstEl) dstEl.textContent = txt; }).catch(()=>{ if (dstEl) dstEl.textContent='—'; });
+    else standingText(d).then(txt => { if (dstEl) dstEl.textContent = txt; }).catch(()=>{ if (dstEl) dstEl.textContent='—'; });
   }
 
   // деталеву мапу перестворюємо
