@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v40';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v41';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // поки хоч одне авто під РЕБ-глушінням — оновлюємось частіше, щоб миттєво зловити кінець глушіння
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
@@ -930,7 +930,13 @@ function closeDetail(){
 let timer;
 async function refresh() {
   try { await loadDevices(); }
-  catch(e){ document.getElementById('updated').textContent = 'помилка: ' + e.message; }
+  catch(e){
+    // не лякаємо страшним технічним текстом — це майже завжди тимчасовий блiп (ліміт запитів/мережа),
+    // застосунок сам повторить спробу наступного циклу автоматично; показуємо СКІЛЬКИ показані дані застаріли
+    const msg = /limit/i.test(e.message) ? 'забагато запитів, зачекай — оновлю автоматично'
+              : 'тимчасові негаразди зі звʼязком, спробую знову';
+    document.getElementById('updated').textContent = '⚠️ ' + msg + ' · дані на екрані ще ' + APP_VERSION;
+  }
   const anyJammed = devCache.some(d => gnssJamState(d.telemetry || {}) > 0);
   timer = setTimeout(refresh, anyJammed ? FAST_REFRESH_MS : REFRESH_MS);
 }
