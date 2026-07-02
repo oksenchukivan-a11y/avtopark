@@ -2,10 +2,11 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v44';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v45';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
+const SIM_SUSPECT_MS = 4 * 3600000; // авто мовчить 4+ год, коли інші на звʼязку → підозра на баланс SIM/покриття
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
 const DRAIN_PCT = 4;               // падіння > 4% при зупинці = підозра на злив
@@ -419,6 +420,14 @@ function renderCards(devs) {
     if (dtc != null && dtc > 0) alerts.push(`🛑 ${dtc} ${dtc===1?'помилка':'помилки'} двигуна`);
     if (et != null && et >= 110) alerts.push(`🌡️ перегрів ${Math.round(et)}°C`);
     const alertHtml = alerts.length ? `<div style="margin-top:6px;font-size:12px;color:#e74c3c;font-weight:700">${alerts.join(' · ')}</div>` : '';
+    // SIM-підозра: авто довго мовчить, тоді як ІНШІ на звʼязку (отже не РЕБ і не збій flespi, а саме ця сімка/покриття).
+    // Баланс НАШИХ сімок дистанційно не читається (FMB003 не вміє USSD) — тому ловимо САМ ФАКТ смерті звʼязку і даємо поповнити в 1 тик.
+    const md_ = d.metadata || {};
+    const offMs = (!online && lastTs) ? (Date.now() - lastTs*1000) : null;
+    const othersOnline = devs.some(o => o.id !== d.id && statusOnline(o.telemetry || {}));
+    const simHtml = (offMs != null && offMs > SIM_SUSPECT_MS && othersOnline)
+      ? `<div style="margin-top:6px;font-size:12px;color:#e67e22;font-weight:700">📵 Звʼязку нема ${fmtDur(offMs/1000)} — перевір баланс SIM${md_.simPhone ? ` ${md_.simPhone} · <a href="https://oplata.lifecell.ua" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:#3aa0ff">поповнити</a>` : ''}</div>`
+      : '';
     // до ТО + запас ходу (цінне для користувача — на видноті в картці)
     const sk = serviceKm(tel), rng = vehicleRange(d, tel);
     const infoArr = [];
@@ -443,7 +452,7 @@ function renderCards(devs) {
         <div class="cell"><div class="v fuel" id="fuel_${d.id}">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
         <div class="cell"><div class="v" id="dm_${d.id}">…</div><div class="l">за сьогодні</div></div>
         <div class="cell"><div class="v">${spdTxt}</div><div class="l">${odoTxt}</div></div>
-      </div>${infoHtml}${diagHtml}${locHtml}${alertHtml}`;
+      </div>${infoHtml}${diagHtml}${locHtml}${alertHtml}${simHtml}`;
     list.appendChild(card);
 
     dayMileage(d.id, startOfDay()).then(km => {
