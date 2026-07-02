@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v43';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v44';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -309,6 +309,8 @@ const GPS_LOST_MS = 20 * 60 * 1000;   // якщо валідного фіксу 
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
   devCache = devs;
+  // знімок останнього успішного стану — щоб при наступному відкритті одразу бачити авто (без спінера й без помилки)
+  try { localStorage.setItem('devSnapshot', JSON.stringify({ ts: Date.now(), devs })); } catch(e){}
   renderCards(devs);
   renderMap(devs);
   document.getElementById('updated').textContent = 'оновлено ' + new Date().toLocaleTimeString('uk-UA') + ' · ' + APP_VERSION;
@@ -546,13 +548,21 @@ function renderMap(devs) {
 // ===== Пробіг з ОДОМЕТРА (точно, дешево) =====
 // Пріоритет: OBD-одометр авто (can.vehicle.mileage — стійкий до РЕБ).
 // Запасний: GNSS-одометр трекера (vehicle.mileage) — для авто БЕЗ OBD-одометра (Ducato 2008, частина електричок).
+// Поле одометра пристрою НЕ змінюється — кешуємо назавжди (економить 1-2 запити на кожен виклик пробігу)
+let mileageFieldCache = {};
+try { mileageFieldCache = JSON.parse(localStorage.getItem('mileageFieldCache') || '{}'); } catch(e) { mileageFieldCache = {}; }
 async function mileageField(id, from, to) {
+  if (mileageFieldCache[id]) return mileageFieldCache[id];
   for (const field of ['can.vehicle.mileage', 'vehicle.mileage']) {
     const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:true, filter:field }));
     const res = await api(`/gw/devices/${id}/messages?data=${data}`);
-    if (res && res.length && res[0][field] != null) return field;
+    if (res && res.length && res[0][field] != null) {
+      mileageFieldCache[id] = field;
+      try { localStorage.setItem('mileageFieldCache', JSON.stringify(mileageFieldCache)); } catch(e){}
+      return field;
+    }
   }
-  return null;
+  return null;   // авто ще не надіслало одометр — не кешуємо, спробуємо ще
 }
 async function odoAt(id, from, to, reverse, field) {
   // беремо до 10 з краю і пропускаємо глюки-нулі (деякі авто, як Kangoo 8440, віддають одометр=0)
@@ -562,19 +572,41 @@ async function odoAt(id, from, to, reverse, field) {
   for (const m of res) { const v = m[field]; if (v != null && v > 0) return v; }
   return null;
 }
+// КЕШ пробігу за день — головний фікс перевантаження flespi: без нього dayMileage бив ~3.5 запити × 5 авто
+// КОЖНІ 15с (renderCards) = ~70 запитів/хв → впирались у ліміт Free-тарифу щоразу. Пробіг за день не міняється
+// щосекунди, тому кеш 3 хв цілком достатньо. Кеш переживає перезавантаження (localStorage) → відкриття теж тихе.
+const DAY_MILEAGE_TTL = 180000;   // 3 хв
+let dayMileageCache = {};
+try { dayMileageCache = JSON.parse(localStorage.getItem('dayMileageCache') || '{}'); } catch(e) { dayMileageCache = {}; }
+const dayMileageInflight = {};   // дедуп одночасних запитів (рендер при відкритті йде двічі: знімок + живі дані)
 async function dayMileage(id, from, to) {
-  to = to || Math.floor(Date.now()/1000);
-  const field = await mileageField(id, from, to);
-  if (!field) return null;
-  const [first, last] = await Promise.all([ odoAt(id, from, to, false, field), odoAt(id, from, to, true, field) ]);
-  if (first == null || last == null) return null;
-  const km = Math.round(last - first);
-  if (km < 0 || km > 3000) return null;   // негатив або абсурд (глюк одометра) — краще нічого, ніж дурне число
-  return km;
+  const today = startOfDay();
+  const c = dayMileageCache[id];
+  if (c && c.day === today && (Date.now() - c.at) < DAY_MILEAGE_TTL) return c.km;
+  if (dayMileageInflight[id]) return dayMileageInflight[id];   // вже летить — чекаємо той самий, не дублюємо запит
+  dayMileageInflight[id] = (async () => {
+    const t = to || Math.floor(Date.now()/1000);
+    let km = null;
+    const field = await mileageField(id, from, t);
+    if (field) {
+      const [first, last] = await Promise.all([ odoAt(id, from, t, false, field), odoAt(id, from, t, true, field) ]);
+      if (first != null && last != null) {
+        const d = Math.round(last - first);
+        if (d >= 0 && d <= 3000) km = d;   // негатив/абсурд — краще нічого, ніж дурне число
+      }
+    }
+    dayMileageCache[id] = { km, day: today, at: Date.now() };
+    try { localStorage.setItem('dayMileageCache', JSON.stringify(dayMileageCache)); } catch(e){}
+    return km;
+  })();
+  try { return await dayMileageInflight[id]; }
+  finally { delete dayMileageInflight[id]; }
 }
 
 // ===== Скільки авто СТОЇТЬ (простій) — від останньої активності двигуна/руху =====
-const standingCache = {};   // id -> { ts:<останній активний момент, сек>, at:<коли запитали, мс> }
+// кеш переживає перезавантаження (localStorage) → відкриття не перезапитує простій для всіх авто (менше запитів)
+let standingCache = {};   // id -> { ts:<останній активний момент, сек>, at:<коли запитали, мс> }
+try { standingCache = JSON.parse(localStorage.getItem('standingCache') || '{}'); } catch(e) { standingCache = {}; }
 function fmtStanding(sec){
   if (sec == null) return null;
   sec = Math.max(0, Math.round(sec));
@@ -614,6 +646,7 @@ async function standingText(dev){
     ts = info ? info.ts : null;
     atLeast = info ? !info.found : false;
     standingCache[id] = { ts, at: Date.now(), atLeast };
+    try { localStorage.setItem('standingCache', JSON.stringify(standingCache)); } catch(e){}
   }
   if (ts == null) return '—';
   return (atLeast ? '≥ ' : '') + fmtStanding(now - ts);
@@ -928,26 +961,29 @@ function closeDetail(){
 // ===== Оновлення =====
 // Адаптивний інтервал: поки хоч одне авто під РЕБ-глушінням — оновлюємось частіше (FAST_REFRESH_MS),
 // щоб миттєво зловити момент, коли глушіння скінчиться, а не чекати до 15 секунд.
-let timer;
+let timer, _refreshing = false;
 async function refresh() {
-  try { await loadDevices(); }
-  catch(e){
-    // не лякаємо страшним технічним текстом — це майже завжди тимчасовий блiп (ліміт запитів/мережа),
-    // застосунок сам повторить спробу наступного циклу автоматично; показуємо СКІЛЬКИ показані дані застаріли
-    const msg = /limit/i.test(e.message) ? 'забагато запитів, зачекай — оновлю автоматично'
-              : 'тимчасові негаразди зі звʼязком, спробую знову';
-    document.getElementById('updated').textContent = '⚠️ ' + msg + ' · дані на екрані ще ' + APP_VERSION;
+  if (_refreshing) return;   // не запускаємо другий запит поверх активного — прибирає сплеск при відкритті (кілька тригерів разом)
+  _refreshing = true;
+  try {
+    await loadDevices();
+  } catch(e) {
+    // М'ЯКО: якщо на екрані вже є дані — просто тиха «оновлюю…», без червоної помилки.
+    // api() і так робить 3 ретраї з паузою, і наступний цикл майже завжди вдалий — користувачу не треба це бачити.
+    const upd = document.getElementById('updated');
+    if (upd) upd.textContent = ((devCache && devCache.length) ? 'оновлюю…' : 'підключаюсь…') + ' · ' + APP_VERSION;
+  } finally {
+    _refreshing = false;
   }
-  // швидкий поллінг МАЄ СЕНС лише перші кілька хвилин глушіння (зловити швидке відновлення).
-  // Якщо глушіння регіональне й тримається годинами (як буває в Сумах) — 3x частіші запити годинами
-  // самі забивають ліміт flespi. Тому швидкий режим лише поки хоч одне авто глушиться МЕНШЕ ніж FAST_WINDOW_MS.
+  // швидкий поллінг лише перші кілька хвилин глушіння (зловити швидке відновлення). Регіональне глушіння в Сумах
+  // триває годинами — тоді 3x частіші запити самі забивають ліміт flespi, тому далі повертаємось на норму.
   const jamSoon = devCache.some(d => {
     const js = gnssJamState(d.telemetry || {});
     return js > 0 && jamDuration(d.id, js) < FAST_WINDOW_MS;
   });
+  clearTimeout(timer);
   timer = setTimeout(refresh, jamSoon ? FAST_REFRESH_MS : REFRESH_MS);
 }
-function startLoop(){ clearTimeout(timer); timer = setTimeout(refresh, 0); }
 
 // ===== Старт =====
 function init() {
@@ -958,16 +994,28 @@ function init() {
   }
   document.getElementById('login').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
+  // МИТТЄВО показуємо останній збережений стан (без спінера, без помилки), поки тягнемо свіжі дані
+  try {
+    const snap = JSON.parse(localStorage.getItem('devSnapshot') || 'null');
+    if (snap && snap.devs && snap.devs.length) {
+      devCache = snap.devs;
+      renderCards(snap.devs);
+      renderMap(snap.devs);
+      const upd = document.getElementById('updated');
+      if (upd) upd.textContent = 'дані від ' + new Date(snap.ts).toLocaleTimeString('uk-UA') + ' · оновлюю…';
+    }
+  } catch(e){}
   setTimeout(() => { if (map) map.invalidateSize(); }, 200);
+  clearTimeout(timer);
   refresh();
-  startLoop();
-  // iOS-PWA: таймер оновлення «засинає» у фоні/при бездіяльності. Оновлюємо щоразу, коли
-  // застосунок знову зʼявляється на екрані або отримує фокус — щоб дані завжди свіжі коли дивишся.
+  // iOS-PWA: таймер оновлення «засинає» у фоні. Оновлюємо, коли застосунок знову на екрані/у фокусі.
+  // КОАЛЕСУЄМО кілька тригерів відкриття (pageshow+focus+visibilitychange разом) в ОДНЕ оновлення (не сплеск).
   if (!window._visHooked) {
     window._visHooked = true;
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-    window.addEventListener('focus', refresh);
-    window.addEventListener('pageshow', refresh);
+    const softRefresh = () => { clearTimeout(window._softT); window._softT = setTimeout(refresh, 500); };
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) softRefresh(); });
+    window.addEventListener('focus', softRefresh);
+    window.addEventListener('pageshow', softRefresh);
   }
 }
 
