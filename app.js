@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v47';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v48';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -627,16 +627,20 @@ async function odoAt(id, from, to, reverse, field) {
 // КЕШ пробігу за день — головний фікс перевантаження flespi: без нього dayMileage бив ~3.5 запити × 5 авто
 // КОЖНІ 15с (renderCards) = ~70 запитів/хв → впирались у ліміт Free-тарифу щоразу. Пробіг за день не міняється
 // щосекунди, тому кеш 3 хв цілком достатньо. Кеш переживає перезавантаження (localStorage) → відкриття теж тихе.
-const DAY_MILEAGE_TTL = 180000;   // 3 хв
+const DAY_MILEAGE_TTL = 180000;   // 3 хв (для «живого» вікна, що росте)
 let dayMileageCache = {};
-try { dayMileageCache = JSON.parse(localStorage.getItem('dayMileageCache') || '{}'); } catch(e) { dayMileageCache = {}; }
+try { dayMileageCache = JSON.parse(localStorage.getItem('dayMileageCache2') || '{}'); } catch(e) { dayMileageCache = {}; }
 const dayMileageInflight = {};   // дедуп одночасних запитів (рендер при відкритті йде двічі: знімок + живі дані)
 async function dayMileage(id, from, to) {
-  const today = startOfDay();
-  const c = dayMileageCache[id];
-  if (c && c.day === today && (Date.now() - c.at) < DAY_MILEAGE_TTL) return c.km;
-  if (dayMileageInflight[id]) return dayMileageInflight[id];   // вже летить — чекаємо той самий, не дублюємо запит
-  dayMileageInflight[id] = (async () => {
+  // КЛЮЧ кешу ВКЛЮЧАЄ період! Без цього «Вчора/Тиждень/Місяць» повертали закешоване «за сьогодні»
+  // (у звіті виходило одометр=36 км при GPS-треку 457 км). Закриті періоди (to задано) незмінні → кеш надовго;
+  // живе вікно «за сьогодні» (без to) росте → короткий TTL.
+  const live = !to;
+  const key = id + ':' + from + ':' + (to || 'live');
+  const c = dayMileageCache[key];
+  if (c && (Date.now() - c.at) < (live ? DAY_MILEAGE_TTL : 24*3600000)) return c.km;
+  if (dayMileageInflight[key]) return dayMileageInflight[key];   // вже летить — чекаємо той самий, не дублюємо запит
+  dayMileageInflight[key] = (async () => {
     const t = to || Math.floor(Date.now()/1000);
     let km = null;
     const field = await mileageField(id, from, t);
@@ -647,12 +651,12 @@ async function dayMileage(id, from, to) {
         if (d >= 0 && d <= 3000) km = d;   // негатив/абсурд — краще нічого, ніж дурне число
       }
     }
-    dayMileageCache[id] = { km, day: today, at: Date.now() };
-    try { localStorage.setItem('dayMileageCache', JSON.stringify(dayMileageCache)); } catch(e){}
+    dayMileageCache[key] = { km, at: Date.now() };
+    try { localStorage.setItem('dayMileageCache2', JSON.stringify(dayMileageCache)); } catch(e){}
     return km;
   })();
-  try { return await dayMileageInflight[id]; }
-  finally { delete dayMileageInflight[id]; }
+  try { return await dayMileageInflight[key]; }
+  finally { delete dayMileageInflight[key]; }
 }
 
 // ===== Скільки авто СТОЇТЬ (простій) — від останньої активності двигуна/руху =====
