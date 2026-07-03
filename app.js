@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v46';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v47';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -194,6 +194,40 @@ async function lastValidFuel(dev){
     } catch(e){}
   }
   return null;
+}
+
+// ===== ЖИВЕ опитування помилок авто (OBD faultcodes через flespi) =====
+// Працює на БУДЬ-ЯКОМУ з наших авто (перевірено на всіх 5): трекер сам питає блок авто і повертає
+// реальні DTC-коди (P0301 тощо) або "No fault codes detected". Потрібен трекер онлайн і ввімкнене запалювання.
+async function checkFaults(devId) {
+  const el = document.getElementById('faults_' + devId);
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = '⏳ Питаю авто (до 60 сек — трекер має бути на звʼязку)…';
+  try {
+    const posted = await api(`/gw/devices/${devId}/commands-queue`, 'POST', [{ name:'custom', properties:{ text:'faultcodes' } }]);
+    const cmdId = posted && posted[0] && posted[0].id;
+    if (!cmdId) throw new Error('не вдалось надіслати');
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      let res;
+      try { res = await api(`/gw/devices/${devId}/commands-result/${cmdId}`); } catch(e) { continue; }
+      const c = res && res[0];
+      if (c && c.executed) {
+        const txt = c.response || '';
+        if (/no fault codes/i.test(txt)) {
+          el.innerHTML = '<span style="color:#2ecc71">✅ Помилок не виявлено (блок авто відповів напряму)</span>';
+        } else {
+          // показуємо сирі коди — їх можна прогуглити (P/C/B/U-код) або показати мені
+          el.innerHTML = '<span style="color:#e74c3c">🛑 Авто повідомило: ' + txt.replace(/</g,'&lt;') + '</span>';
+        }
+        return;
+      }
+    }
+    el.textContent = '⌛ Авто не відповіло за 60 сек — найчастіше заглушене запалювання. Спробуй, коли машина заведена.';
+  } catch(e) {
+    el.textContent = '⚠️ Не вийшло: ' + e.message + ' — спробуй ще раз.';
+  }
 }
 
 // ===== Стан акумулятора / звʼязку / супутників (діагностика) =====
@@ -843,7 +877,11 @@ function openDetail(d) {
   if (dtc != null) obdRows.push(`<div class="row"><span class="k">🛑 Помилки двигуна</span><span class="val" style="color:${dtc>0?'#e74c3c':'#2ecc71'}">${dtc>0?dtc+' — перевір!':'нема (0) ✅'}</span></div>`);
   if (sk != null) obdRows.push(`<div class="row"><span class="k">🔧 До ТО</span><span class="val">${Math.round(sk).toLocaleString('uk-UA')} км</span></div>`);
   if (ab != null) obdRows.push(`<div class="row"><span class="k">💧 AdBlue</span><span class="val">${Math.round(ab)} %</span></div>`);
-  const obdBlock = obdRows.length ? `<div class="section"><h3>Двигун / OBD</h3>${obdRows.join('')}</div>` : '';
+  // ЖИВА перевірка помилок для БУДЬ-ЯКОГО авто: OBD-команда faultcodes через flespi (працює на всіх 5, перевірено).
+  // Пасивний can.dtc.number шле лише Kangoo 8440 — а кнопка опитує сам блок авто напряму, будь-коли.
+  obdRows.push(`<div class="row"><span class="k">🔍 Живе опитування помилок</span><span class="val"><button class="btn-sm btn" style="padding:7px 12px" onclick="event.stopPropagation();checkFaults(${d.id})">Перевірити</button></span></div>`);
+  obdRows.push(`<div id="faults_${d.id}" class="muted" style="display:none"></div>`);
+  const obdBlock = `<div class="section"><h3>Двигун / OBD</h3>${obdRows.join('')}</div>`;
 
   document.getElementById('dBody').innerHTML = `
     <div class="section">
