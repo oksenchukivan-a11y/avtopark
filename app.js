@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v48';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v49';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -744,7 +744,7 @@ async function periodReport(id, from, to) {
 
   // 2) усі повідомлення періоду — лише потрібні поля (при 2-сек піллінгу за день це тисячі рядків; вузький fields = легший і швидший запит)
   const data = encodeURIComponent(JSON.stringify({ from, to, count:40000,
-    fields:'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level' }));
+    fields:'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level' }));
   let msgs = [];
   try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e) { msgs = []; }
   msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
@@ -756,6 +756,10 @@ async function periodReport(id, from, to) {
   const fills = [], drains = [];
   const stops = [];
   let stopStart = null, stopPt = null, stopOdo = null, curOdo = null;
+  // семпли для СТРІЧКИ ДНЯ: [ts, одометр] і [ts, швидкість>0] — щоб порахувати км і макс. швидкість кожного відрізка руху.
+  // Одометри двох джерел НЕ змішуємо (can=пробіг авто, gnss=лічильник трекера — різні шкали!): наприкінці беремо одне.
+  const odoCan = [], odoGnss = [], spdS = [];
+  let lastMsgTs = null;
 
   // справжня зупинка = швидкість ~0 І одометр НЕ зріс (інакше це рух під РЕБ-глушінням)
   function closeStop(endTs){
@@ -768,11 +772,17 @@ async function periodReport(id, from, to) {
 
   for (const m of msgs) {
     const ts = m.timestamp;
+    if (ts != null) lastMsgTs = ts;
     const lat = m['position.latitude'], lon = m['position.longitude'];
     let sp = m['position.speed'];
     if (sp == null) sp = m['can.vehicle.speed'];
     const od = m['can.vehicle.mileage'];
     if (od != null && od > 0) { curOdo = od; if (stopStart != null && stopOdo == null) stopOdo = od; }  // od>0: ігнор глюків-нулів
+    // семпли для відрізків руху (пушимо лише зміни — щоб масиви лишались маленькими)
+    if (od != null && od > 0 && (!odoCan.length || odoCan[odoCan.length-1][1] !== od)) odoCan.push([ts, od]);
+    const odG = m['vehicle.mileage'];
+    if (odG != null && odG > 0 && (!odoGnss.length || odG - odoGnss[odoGnss.length-1][1] > 0.05)) odoGnss.push([ts, odG]);
+    if (sp != null && sp >= 3 && sp < 200) spdS.push([ts, sp]);
 
     // валідність GPS-фіксу — відсікаємо «стрибки» (дефолтна/застаріла позиція без супутників)
     const valid = m['position.valid'];
@@ -823,8 +833,8 @@ async function periodReport(id, from, to) {
       lastFuel = flv;
       if (prevFuel != null) {
         const d = flv - prevFuel;
-        if (d >= FILL_L) fills.push({ ts, l: d });
-        else if (-d >= DRAIN_L && (sp==null || sp<3)) drains.push({ ts, l: -d });
+        if (d >= FILL_L) fills.push({ ts, l: d, pt: prevPt });                        // pt — де сталась заправка
+        else if (-d >= DRAIN_L && (sp==null || sp<3)) drains.push({ ts, l: -d, pt: prevPt });
       }
       prevFuel = flv;
     }
@@ -839,9 +849,49 @@ async function periodReport(id, from, to) {
     drainedL = Math.round(drains.reduce((s,f)=>s+f.l,0));
     spentL = Math.max(0, Math.round((firstFuel - lastFuel) + filledL - drainedL));
   }
-  return { odoKm, gpsKm, filledL, spentL, drainedL,
-           fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l)})),
-           drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l)})),
+
+  // ===== ВІДРІЗКИ РУХУ (для стрічки дня): проміжки між зупинками =====
+  const odoS = odoCan.length >= 2 ? odoCan : odoGnss;   // одне джерело на весь період (шкали різні — не мішати!)
+  function odoNear(t){   // найближчий семпл одометра до моменту t (в межах 30 хв)
+    if (!odoS.length) return null;
+    let best = null, bd = 1800;
+    let lo = 0, hi = odoS.length-1;
+    while (lo < hi) { const mid = (lo+hi)>>1; (odoS[mid][0] < t) ? lo = mid+1 : hi = mid; }
+    for (const i of [lo-1, lo, lo+1]) {
+      if (i >= 0 && i < odoS.length) { const dd = Math.abs(odoS[i][0]-t); if (dd < bd) { bd = dd; best = odoS[i][1]; } }
+    }
+    return best;
+  }
+  const segments = [];
+  const sortedStops = stops.slice().sort((a,b)=>a.ts-b.ts);
+  function addSeg(a, b){
+    if (b - a < 120) return;                     // <2 хв — шумовий проміжок
+    // ЗВУЖУЄМО вікно до реальних свідчень руху (перший/останній замір швидкості ≥3 у вікні) —
+    // інакше ніч без даних між "кінцем доби" і першою зупинкою рахувалась як "їхав 9 годин".
+    let first = null, last = null, mx = 0;
+    for (const s of spdS) {
+      if (s[0] >= a && s[0] <= b) { if (first == null) first = s[0]; last = s[0]; if (s[1] > mx) mx = s[1]; }
+    }
+    if (first == null) return;                   // жодного заміру руху — це не поїздка
+    a = first; b = Math.min(b, last + 60);
+    if (b - a < 120) return;
+    const o1 = odoNear(a), o2 = odoNear(b);
+    let km = (o1 != null && o2 != null) ? Math.round((o2-o1)*10)/10 : null;
+    if (km != null && km < 0.3) return;          // фактично не рухались
+    if (km != null && km > 3000) km = null;      // глюк одометра
+    segments.push({ ts:a, dur:b-a, km, maxSpd:Math.round(mx) });
+  }
+  let cursor = from;
+  for (const s of sortedStops) { addSeg(cursor, s.ts); cursor = Math.max(cursor, s.ts + s.dur); }
+  if (lastMsgTs != null) addSeg(cursor, Math.min(to, lastMsgTs));
+  const driveSec = segments.reduce((s,x)=>s+x.dur, 0);
+  // «Стояв» = увесь період мінус рух (просто і чесно: ніч/паузи без даних — це теж стоянка)
+  const periodEnd = Math.min(to, Math.floor(Date.now()/1000));
+  const standSec = Math.max(0, (periodEnd - from) - driveSec);
+
+  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments,
+           fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
+           drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
 }
 
@@ -899,12 +949,7 @@ function openDetail(d) {
       <button class="reboot" onclick="rebootTracker(${d.id})">🔄 Перезавантажити трекер</button>
     </div>
     ${obdBlock}
-    <div class="tabs">
-      <div class="tab active" data-p="today" onclick="loadPeriod(this)">Сьогодні</div>
-      <div class="tab" data-p="yest" onclick="loadPeriod(this)">Вчора</div>
-      <div class="tab" data-p="week" onclick="loadPeriod(this)">Тиждень</div>
-      <div class="tab" data-p="month" onclick="loadPeriod(this)">Місяць</div>
-    </div>
+    <div class="tabs">${dayTabsHtml()}</div>
 
     <div id="periodOut"><div class="spinner">…</div></div>`;
 
@@ -922,13 +967,36 @@ function openDetail(d) {
   loadPeriod(document.querySelector('#detail .tab.active'));
 }
 
+// вкладки: останні 7 днів по ДАТАХ (як у Wialon/OVERSEER — «пт 3.07») + Тиждень + Місяць
+function dayTabsHtml(){
+  const wd = ['нд','пн','вт','ср','чт','пт','сб'];
+  let h = '';
+  for (let i = 0; i < 7; i++) {
+    const dt = new Date(startOfDay()*1000 - i*86400000);
+    const label = i === 0 ? 'Сьогодні' : `${wd[dt.getDay()]} ${dt.getDate()}.${String(dt.getMonth()+1).padStart(2,'0')}`;
+    h += `<div class="tab${i===0?' active':''}" data-p="d${i}" onclick="loadPeriod(this)">${label}</div>`;
+  }
+  h += `<div class="tab" data-p="week" onclick="loadPeriod(this)">Тиждень</div>`;
+  h += `<div class="tab" data-p="month" onclick="loadPeriod(this)">Місяць</div>`;
+  return h;
+}
 function periodRange(p){
   const now = Math.floor(Date.now()/1000);
+  const dm = /^d(\d+)$/.exec(p);
+  if (dm) { const i = +dm[1]; const t0 = startOfDay() - i*86400; return [t0, i === 0 ? now : t0 + 86400]; }
   if (p === 'today') return [startOfDay(), now];
   if (p === 'yest') { const t = startOfDay(); return [t-86400, t]; }
   if (p === 'week') return [now - 7*86400, now];
   const d = new Date(); d.setDate(1); d.setHours(0,0,0,0);
   return [Math.floor(d/1000), now];
+}
+// тап по події стрічки → показати місце на карті деталей
+function focusEvt(lat, lon, label){
+  if (!dMap || lat == null) return;
+  dMap.setView([lat, lon], 16);
+  L.popup({ closeButton:true }).setLatLng([lat, lon]).setContent(label).openOn(dMap);
+  const el = document.getElementById('dMap');
+  if (el) el.scrollIntoView({ behavior:'smooth', block:'center' });
 }
 
 async function loadPeriod(el) {
@@ -949,6 +1017,8 @@ async function loadPeriod(el) {
   out.innerHTML = `
     <div class="section">
       <h3>Зведення</h3>
+      <div class="row"><span class="k">🟢 У русі</span><span class="val" style="color:var(--green)">${r.driveSec ? fmtDur(r.driveSec) : '—'}</span></div>
+      <div class="row"><span class="k">🅿️ Стояв</span><span class="val">${r.standSec ? fmtDur(r.standSec) : '—'}</span></div>
       <div class="row"><span class="k">📏 Пробіг з одометра</span><span class="val" style="color:var(--accent)">${f(r.odoKm,'км')}</span></div>
       <div class="row"><span class="k">🛰️ Пробіг по GPS (трек)</span><span class="val">${f(r.gpsKm,'км')}${jammed?' <span style="color:var(--yellow);font-size:11px">⚠ РЕБ</span>':''}</span></div>
       ${jammed?`<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:4px 0">⚠ GPS глушився (РЕБ) — орієнтуйся на одометр</div>`:''}
@@ -960,29 +1030,47 @@ async function loadPeriod(el) {
     <div class="section">
       <h3>Трек і зупинки (≥3 хв)</h3>
       <div id="dMap" class="dmap"></div>
-      <div id="stopsOut" style="margin-top:10px"></div>
     </div>
 
-    ${(r.fills.length||r.drains.length) ? `<div class="section"><h3>Події палива</h3><div id="evOut"></div></div>` : ''}`;
+    <div class="section">
+      <h3>Стрічка дня</h3>
+      <div id="tlOut"><div class="muted">…</div></div>
+    </div>`;
 
   // мапа треку
   drawTrack(r.track, r.stops);
 
-  // список зупинок
-  const so = document.getElementById('stopsOut');
-  if (r.stops.length) {
-    so.innerHTML = r.stops.map((s,i)=>`<div class="ev"><span><b>№${i+1}</b> &nbsp;${fmtDur(s.dur)}</span><span class="when">${fmtDateTime(s.ts)}</span></div>`).join('');
-  } else {
-    so.innerHTML = '<div class="muted">зупинок ≥3 хв не знайдено</div>';
-  }
+  // ===== СТРІЧКА ДНЯ: зупинки + відрізки руху + заправки/зливи, хронологічно, тап → місце на карті =====
+  const items = [];
+  r.stops.forEach((s,i)=> items.push({ ts:s.ts, type:'stop', n:i+1, dur:s.dur, pt:s.pt }));
+  (r.segments||[]).forEach(s=> items.push({ ts:s.ts, type:'drive', dur:s.dur, km:s.km, maxSpd:s.maxSpd }));
+  r.fills.forEach(x=> items.push({ ts:x.ts, type:'fill', l:x.l, pt:x.pt }));
+  r.drains.forEach(x=> items.push({ ts:x.ts, type:'drain', l:x.l, pt:x.pt }));
+  items.sort((a,b)=> a.ts - b.ts);
 
-  // події палива
-  const ev = document.getElementById('evOut');
-  if (ev) {
-    let h='';
-    r.fills.forEach(x=> h+=`<div class="ev"><span class="amt up">🟢 +${x.l} л</span><span class="when">${fmtDateTime(x.ts)}</span></div>`);
-    r.drains.forEach(x=> h+=`<div class="ev"><span class="amt down">🔴 −${x.l} л злив?</span><span class="when">${fmtDateTime(x.ts)}</span></div>`);
-    ev.innerHTML = h;
+  const tl = document.getElementById('tlOut');
+  if (!items.length) {
+    tl.innerHTML = '<div class="muted">подій за період нема</div>';
+  } else {
+    tl.innerHTML = items.map((it,k)=>{
+      const t = fmtTime(it.ts);
+      const tap = it.pt ? ` onclick="focusEvt(${it.pt[0]},${it.pt[1]},'${t}')" style="cursor:pointer"` : '';
+      if (it.type === 'stop')
+        return `<div class="ev"${tap}><span>🅿️ <b>№${it.n}</b> стояв ${fmtDur(it.dur)}<div class="when" id="tla_${k}">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
+      if (it.type === 'drive')
+        return `<div class="ev"><span>🟢 їхав ${fmtDur(it.dur)}${it.km!=null?` · ${it.km} км`:''}${it.maxSpd?` · до ${it.maxSpd} км/г`:''}</span><span class="when">${t}</span></div>`;
+      if (it.type === 'fill')
+        return `<div class="ev"${tap}><span class="amt up">⛽ заправка +${it.l} л<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
+      return `<div class="ev"${tap}><span class="amt down">🔴 −${it.l} л злив?<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
+    }).join('');
+    // адреси подій — асинхронно (кеш + серійна черга, Nominatim не перевантажуємо)
+    items.forEach((it,k)=>{
+      if (!it.pt) return;
+      geocode(it.pt[0], it.pt[1]).then(addr=>{
+        const el = document.getElementById('tla_'+k);
+        if (el) el.textContent = addr || (it.pt[0].toFixed(4)+', '+it.pt[1].toFixed(4));
+      }).catch(()=>{});
+    });
   }
 }
 
