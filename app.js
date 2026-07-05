@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v50';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v51';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -99,6 +99,10 @@ function haversine(a, b){ // [lat,lon] → метри
   const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.sqrt(h));
 }
+// «Розумний регіон»: парк працює в Україні. Після холодного старту GPS/глушіння трекер інколи шле
+// свою ДЕФОЛТНУ точку (Ліма, Перу) — і зрідка навіть із valid=true, тому сама лише перевірка валідності
+// не рятує (машина «летіла» через Атлантику на треку). Відсікаємо все за межами України+сусідів.
+function saneRegion(lat, lon){ return lat >= 40 && lat <= 62 && lon >= 15 && lon <= 45; }
 // локальна пласка проєкція (метри) відносно точки ref — досить точно на масштабі міста, для згладжування треку
 function toLocalXY(pt, ref){
   const R = 6371000, rad = Math.PI/180;
@@ -561,7 +565,7 @@ function renderMap(devs) {
     const tel = d.telemetry || {};
     let lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
     const valid = tv(tel,'position.valid');
-    if (lat != null && lon != null && valid !== false) {
+    if (lat != null && lon != null && valid !== false && saneRegion(lat, lon)) {
       lastValidPos[d.id] = [lat, lon];                              // свіжа валідна точка — запамʼятовуємо
       lastValidPosTs[d.id] = Date.now();
       try {
@@ -791,6 +795,8 @@ async function periodReport(id, from, to) {
     if (valid !== undefined && valid !== null) goodFix = (valid === true);
     else if (sats !== undefined && sats !== null) goodFix = (sats >= 3);
     else goodFix = true;
+    // дефолтна точка трекера (Ліма) зрідка приходить НАВІТЬ з valid=true — географічний щит обовʼязковий
+    if (lat != null && lon != null && !saneRegion(lat, lon)) goodFix = false;
 
     // трек + GPS-відстань (тільки валідні точки, без телепортів)
     const hdop = m['position.hdop'];
@@ -814,10 +820,10 @@ async function periodReport(id, from, to) {
       }
     }
 
-    // зупинки (швидкість ~0 І одометр не росте)
+    // зупинки (швидкість ~0 І одометр не росте); точка стоянки — ЛИШЕ з валідного фіксу (не Ліма!)
     if (sp != null && ts != null) {
       if (sp < STOP_SPEED) {
-        if (stopStart == null) { stopStart = ts; stopPt = (lat!=null && lon!=null) ? [lat,lon] : prevPt; stopOdo = curOdo; }
+        if (stopStart == null) { stopStart = ts; stopPt = (goodFix && lat!=null && lon!=null) ? [lat,lon] : prevPt; stopOdo = curOdo; }
       } else {
         closeStop(ts);
       }
