@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v51';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v52';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -277,6 +277,23 @@ function jamDuration(devId, jamState){
   if (jamStartTs[devId]) { delete jamStartTs[devId]; try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){} }
   return 0;
 }
+// ===== АВТОЛІКУВАННЯ зависання GPS-модуля =====
+// Доведено перехресною перевіркою з MegaGPS (05.07.2026): після ДОВГОГО глушіння GPS-модуль FMB003
+// зависає і НЕ відновлюється сам, навіть коли РЕБ вимкнувся (MegaGPS на тих самих авто вже чистий,
+// а FMB003 далі рапортує jam=2). Ліки — cpureset. Робимо це автоматично: якщо критичне глушіння
+// тримається > 6 год — ставимо перезавантаження в чергу (виконається при наступному виході на звʼязок).
+// Кулдаун 12 год: якщо РЕБ реально ще давить, дарма не смикаємо (ребут під час справжнього глушіння нешкідливий, але й безглуздий).
+const AUTO_REBOOT_AFTER_MS = 6 * 3600000, AUTO_REBOOT_COOLDOWN_MS = 12 * 3600000;
+let autoRebootAt = {};
+try { autoRebootAt = JSON.parse(localStorage.getItem('autoRebootAt') || '{}'); } catch(e) { autoRebootAt = {}; }
+function maybeAutoReboot(d, tel){
+  if (gnssJamState(tel) !== 2) return;
+  if (jamDuration(d.id, 2) < AUTO_REBOOT_AFTER_MS) return;
+  if (Date.now() - (autoRebootAt[d.id] || 0) < AUTO_REBOOT_COOLDOWN_MS) return;
+  autoRebootAt[d.id] = Date.now();
+  try { localStorage.setItem('autoRebootAt', JSON.stringify(autoRebootAt)); } catch(e){}
+  api(`/gw/devices/${d.id}/commands-queue`, 'POST', [{ name:'custom', properties:{ text:'cpureset' } }]).catch(()=>{});
+}
 // запас з адаптацією під ЗАРЯД для електричок (датчик авто застрягає на постійному значенні — як Kangoo Z.E. = 185 при будь-якому %)
 function vehicleRange(dev, tel){
   const md = (dev && typeof dev === 'object' && dev.metadata) || {};
@@ -455,6 +472,7 @@ function renderCards(devs) {
     const gpsLostLong = !posValid && gpsLostMsC != null && gpsLostMsC > GPS_LOST_MS;
     const jam = gnssJamState(tel);
     const jamMs = jamDuration(d.id, jam);
+    maybeAutoReboot(d, tel);   // GPS-модуль завис після довгого глушіння → авто-cpureset (див. комент функції)
     const locHtml = showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs/1000)} — сигнал відсутній</div>`
