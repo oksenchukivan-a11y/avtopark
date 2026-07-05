@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v52';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v53';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -409,6 +409,9 @@ function isActive(dev, tel, online) {
   const volt = tv(tel,'external.powersource.voltage');
   if (!isEV && volt != null && volt >= 13.0) return true;
   if (tv(tel,'engine.ignition.status') === true) return true;
+  // РУХ ПО АКСЕЛЕРОМЕТРУ — не залежить ні від GPS, ні від РЕБ (виявлено 05.07: Leaf їхав із зависшим
+  // GPS-модулем, і жоден GPS-сигнал руху не працював; акселерометр — останній надійний свідок).
+  if (tv(tel,'movement.status') === true) return true;
   const spd = tv(tel,'position.speed'), valid = tv(tel,'position.valid'), sats = tv(tel,'position.satellites');
   // підтверджений рух: швидкість + фікс не «невалідний» + ЯВНО достатньо супутників (не РЕБ-телепорт).
   // sats обовʼязково число ≥4 — GPS-елемент AVL завжди його шле, тому null тут теж підозріло (не довіряємо).
