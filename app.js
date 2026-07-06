@@ -2,14 +2,12 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v54';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v55';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
 const SIM_SUSPECT_MS = 4 * 3600000; // авто мовчить 4+ год, коли інші на звʼязку → підозра на баланс SIM/покриття
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
-const FILL_PCT = 5;                // стрибок рівня вгору > 5% = заправка
-const DRAIN_PCT = 4;               // падіння > 4% при зупинці = підозра на злив
 const FILL_L = 5;                  // або стрибок > 5 л = заправка (для авто, що дають літри)
 const DRAIN_L = 4;                 // падіння > 4 л при зупинці = злив
 const STOP_SPEED = 3;              // км/год: нижче — машина стоїть
@@ -63,6 +61,9 @@ async function api(path, method, body) {
   throw new Error(last || 'api');
 }
 
+// екранування для будь-якого рядка, що йде в innerHTML/тултіпи: назви пристроїв і метадані приходять
+// з flespi і можуть містити HTML — а в localStorage лежить токен, тож XSS тут = крадіжка токена
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function tv(tel, key) {
   const x = tel && tel[key];
   if (x == null) return null;
@@ -203,9 +204,12 @@ async function lastValidFuel(dev){
 // ===== ЖИВЕ опитування помилок авто (OBD faultcodes через flespi) =====
 // Працює на БУДЬ-ЯКОМУ з наших авто (перевірено на всіх 5): трекер сам питає блок авто і повертає
 // реальні DTC-коди (P0301 тощо) або "No fault codes detected". Потрібен трекер онлайн і ввімкнене запалювання.
+const _faultsInflight = {};
 async function checkFaults(devId) {
   const el = document.getElementById('faults_' + devId);
   if (!el) return;
+  if (_faultsInflight[devId]) return;   // вже питаємо — другий тап не шле другу команду
+  _faultsInflight[devId] = true;
   el.style.display = 'block';
   el.textContent = '⏳ Питаю авто (до 60 сек — трекер має бути на звʼязку)…';
   try {
@@ -231,6 +235,8 @@ async function checkFaults(devId) {
     el.textContent = '⌛ Авто не відповіло за 60 сек — найчастіше заглушене запалювання. Спробуй, коли машина заведена.';
   } catch(e) {
     el.textContent = '⚠️ Не вийшло: ' + e.message + ' — спробуй ще раз.';
+  } finally {
+    delete _faultsInflight[devId];
   }
 }
 
@@ -290,9 +296,10 @@ function maybeAutoReboot(d, tel){
   if (gnssJamState(tel) !== 2) return;
   if (jamDuration(d.id, 2) < AUTO_REBOOT_AFTER_MS) return;
   if (Date.now() - (autoRebootAt[d.id] || 0) < AUTO_REBOOT_COOLDOWN_MS) return;
-  autoRebootAt[d.id] = Date.now();
-  try { localStorage.setItem('autoRebootAt', JSON.stringify(autoRebootAt)); } catch(e){}
-  api(`/gw/devices/${d.id}/commands-queue`, 'POST', [{ name:'custom', properties:{ text:'cpureset' } }]).catch(()=>{});
+  autoRebootAt[d.id] = Date.now();   // ставимо одразу (проти гонки паралельних refresh)...
+  api(`/gw/devices/${d.id}/commands-queue`, 'POST', [{ name:'custom', properties:{ text:'cpureset' } }])
+    .then(()=>{ try { localStorage.setItem('autoRebootAt', JSON.stringify(autoRebootAt)); } catch(e){} })
+    .catch(()=>{ delete autoRebootAt[d.id]; });   // ...але фейл POST знімає кулдаун — спробуємо наступного циклу
 }
 // запас з адаптацією під ЗАРЯД для електричок (датчик авто застрягає на постійному значенні — як Kangoo Z.E. = 185 при будь-якому %)
 function vehicleRange(dev, tel){
@@ -310,7 +317,6 @@ function evBatt(tel){
   return {
     soc: tv(tel,'can.vehicle.battery.level'),       // заряд, %
     soh: tv(tel,'can.vehicle.battery.health'),      // здоровʼя (знос), %
-    range: rangeKm(tel),                            // запас ходу, км (без глюків)
   };
 }
 // OBD-стан двигуна (з CAN авто)
@@ -348,12 +354,12 @@ function markerFor(dev, latlon, online, active, gpsLost) {
   const m = dev.metadata || {};
   const short = m.short || dev.name || '';
   const mk = L.marker(latlon, { icon: vehIcon(dev, online, active, gpsLost) });
-  mk.bindTooltip(short, { permanent:true, direction:'right', offset:[16,0], className:'veh-label' });
+  mk.bindTooltip(esc(short), { permanent:true, direction:'right', offset:[16,0], className:'veh-label' });
   return mk;
 }
 
 // ===== Список + головна мапа =====
-let map, layersCtl, markers = {}, devCache = [];
+let map, markers = {}, devCache = [];
 let lastValidPos = {};   // остання ВАЛІДНА позиція кожного авто — щоб не зникали з карти й не стрибали в Перу
 try { lastValidPos = JSON.parse(localStorage.getItem('lastValidPos') || '{}'); } catch(e) { lastValidPos = {}; }
 let lastValidPosTs = {};   // коли саме був той останній валідний фікс — щоб бачити "GPS втрачено Х год тому"
@@ -467,7 +473,8 @@ function renderCards(devs) {
     const fuelLabel = ev.soc != null ? 'заряд батареї' : 'паливо';
     const odoTxt = odo != null ? Math.round(odo).toLocaleString('uk-UA') + ' км' : '—';
     const active = displayActive(d, tel, online);
-    if (active) { nActive++; delete standingCache[d.id]; }   // поки в роботі — скидаємо кеш простою
+    if (active && standingCache[d.id]) { delete standingCache[d.id]; try { localStorage.setItem('standingCache', JSON.stringify(standingCache)); } catch(e){} }   // скидаємо кеш простою (і в localStorage!)
+    if (active) { nActive++; }
     else nStopped++;                                         // усе інше (зокрема офлайн) — «стоять»
     const spdTxt = (spd != null && spd >= 3) ? Math.round(spd) + ' км/г'
                  : (active ? 'працює' : (online ? 'стоїть' : '—'));
@@ -485,7 +492,7 @@ function renderCards(devs) {
       : '';
     // де стоїть (адреса) — лише для незадіяних на звʼязку
     const posValid = tv(tel,'position.valid') !== false;     // валідний GPS-фікс (не дефолтна точка Перу)
-    const showLoc = !active && lat != null && lon != null && posValid;
+    const showLoc = !active && lat != null && lon != null && posValid && saneRegion(lat, lon);   // геощит і тут (Ліма буває з valid=true)
     // GPS втрачено надовго — розрізняємо ПРИЧИНУ: офіційний індикатор глушіння (РЕБ) з трекера, або справді апаратна проблема
     const gpsLostMsC = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
     const gpsLostLong = !posValid && gpsLostMsC != null && gpsLostMsC > GPS_LOST_MS;
@@ -510,7 +517,7 @@ function renderCards(devs) {
     const offMs = (!online && lastTs) ? (Date.now() - lastTs*1000) : null;
     const othersOnline = devs.some(o => o.id !== d.id && statusOnline(o.telemetry || {}));
     const simHtml = (offMs != null && offMs > SIM_SUSPECT_MS && othersOnline)
-      ? `<div style="margin-top:6px;font-size:12px;color:#e67e22;font-weight:700">📵 Звʼязку нема ${fmtDur(offMs/1000)} — перевір баланс SIM${md_.simPhone ? ` ${md_.simPhone} · <a href="https://oplata.lifecell.ua" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:#3aa0ff">поповнити</a>` : ''}</div>`
+      ? `<div style="margin-top:6px;font-size:12px;color:#e67e22;font-weight:700">📵 Звʼязку нема ${fmtDur(offMs/1000)} — перевір баланс SIM${md_.simPhone ? ` ${esc(md_.simPhone)} · <a href="https://oplata.lifecell.ua" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:#3aa0ff">поповнити</a>` : ''}</div>`
       : '';
     // до ТО + запас ходу (цінне для користувача — на видноті в картці)
     const sk = serviceKm(tel), rng = vehicleRange(d, tel);
@@ -529,7 +536,7 @@ function renderCards(devs) {
     card.innerHTML = `
       <div class="top">
         <span class="dot" style="background:${dotColor};${active?'box-shadow:0 0 7px #2ecc71':''}"></span>
-        <span class="name">${d.name}</span>
+        <span class="name">${esc(d.name)}</span>
         <span class="badge" style="margin:0;${active?'color:#2ecc71':''}">${active?'🟢 в роботі':(lastTs?ago(lastTs):'')}</span>
       </div>
       <div class="grid">
@@ -595,7 +602,7 @@ function renderMap(devs) {
     map = L.map('map', { zoomControl:true, attributionControl:false }).setView([50.9,34.8], 9);
     const bl = baseLayers();
     bl['Карта'].addTo(map);
-    layersCtl = L.control.layers(bl, {}, { position:'topright' }).addTo(map);
+    L.control.layers(bl, {}, { position:'topright' }).addTo(map);
   }
   const pts = [];
   for (const d of devs) {
@@ -626,7 +633,7 @@ function renderMap(devs) {
     const gpsWarn = jamState === 2 ? `<br>🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs2/1000)}`
       : jamState === 1 ? `<br>⚠️ GPS ослаблений вже ${fmtDur(jamMs2/1000)}`
       : (gpsLost ? `<br>⚠️ GPS втрачено ${fmtDur(gpsLostMs/1000)} тому — точка застаріла` : '');
-    const html = `<b>${d.name}</b><br>${status}${liters!=null?' · '+liters+' л':''}${gpsWarn}`;
+    const html = `<b>${esc(d.name)}</b><br>${status}${liters!=null?' · '+liters+' л':''}${gpsWarn}`;
     if (markers[d.id]) {
       markers[d.id].setLatLng([lat,lon]);
       markers[d.id].setIcon(vehIcon(d, online, active, gpsLost));   // оновлюємо обідок (завівся / заглушив / GPS втрачено)
@@ -650,8 +657,13 @@ async function mileageField(id, from, to) {
     const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:true, filter:field }));
     const res = await api(`/gw/devices/${id}/messages?data=${data}`);
     if (res && res.length && res[0][field] != null) {
-      mileageFieldCache[id] = field;
-      try { localStorage.setItem('mileageFieldCache', JSON.stringify(mileageFieldCache)); } catch(e){}
+      // НАЗАВЖДИ кешуємо лише справжній CAN-одометр. Якщо у пробитому вікні CAN випадково мовчав
+      // (авто спало), раніше назавжди фіксувався GNSS-фолбек — а він отруєний телепортом «у Ліму»
+      // (+12600 км) і дає нулі/сміття. Тепер фолбек діє лише для цього виклику, CAN пробуємо знову.
+      if (field === 'can.vehicle.mileage') {
+        mileageFieldCache[id] = field;
+        try { localStorage.setItem('mileageFieldCache', JSON.stringify(mileageFieldCache)); } catch(e){}
+      }
       return field;
     }
   }
@@ -671,15 +683,26 @@ async function odoAt(id, from, to, reverse, field) {
 const DAY_MILEAGE_TTL = 180000;   // 3 хв (для «живого» вікна, що росте)
 let dayMileageCache = {};
 try { dayMileageCache = JSON.parse(localStorage.getItem('dayMileageCache2') || '{}'); } catch(e) { dayMileageCache = {}; }
+// чистка при завантаженні: записи, старші за 7 днів, більше не потрібні (інакше кеш росте вічно)
+{
+  const cutoff = Date.now() - 7*86400000;
+  let dirty = false;
+  for (const k of Object.keys(dayMileageCache)) if ((dayMileageCache[k].at || 0) < cutoff) { delete dayMileageCache[k]; dirty = true; }
+  if (dirty) try { localStorage.setItem('dayMileageCache2', JSON.stringify(dayMileageCache)); } catch(e){}
+}
 const dayMileageInflight = {};   // дедуп одночасних запитів (рендер при відкритті йде двічі: знімок + живі дані)
 async function dayMileage(id, from, to) {
   // КЛЮЧ кешу ВКЛЮЧАЄ період! Без цього «Вчора/Тиждень/Місяць» повертали закешоване «за сьогодні»
-  // (у звіті виходило одометр=36 км при GPS-треку 457 км). Закриті періоди (to задано) незмінні → кеш надовго;
-  // живе вікно «за сьогодні» (без to) росте → короткий TTL.
-  const live = !to;
-  const key = id + ':' + from + ':' + (to || 'live');
+  // (у звіті виходило одометр=36 км при GPS-треку 457 км).
+  // «Живий» період = to не задано АБО to ≈ зараз (вкладки передають to=now, і без нормалізації ключ був
+  // унікальний на кожен тап → нуль влучень у кеш і вічний ріст localStorage).
+  const now = Math.floor(Date.now()/1000);
+  const live = !to || to >= now - 90;
+  const key = id + ':' + from + ':' + (live ? 'live' : to);
   const c = dayMileageCache[key];
-  if (c && (Date.now() - c.at) < (live ? DAY_MILEAGE_TTL : 24*3600000)) return c.km;
+  // закритий період кешуємо 2 год (НЕ добу: трекер після відновлення звʼязку докидає буферизовані записи
+  // заднім числом, і «вчора», пораховане о 00:05, було б занижене цілу добу)
+  if (c && (Date.now() - c.at) < (live ? DAY_MILEAGE_TTL : 2*3600000)) return c.km;
   if (dayMileageInflight[key]) return dayMileageInflight[key];   // вже летить — чекаємо той самий, не дублюємо запит
   dayMileageInflight[key] = (async () => {
     const t = to || Math.floor(Date.now()/1000);
@@ -744,8 +767,10 @@ async function standingText(dev){
     const info = await lastActiveInfo(id, isEV);
     ts = info ? info.ts : null;
     atLeast = info ? !info.found : false;
-    standingCache[id] = { ts, at: Date.now(), atLeast };
-    try { localStorage.setItem('standingCache', JSON.stringify(standingCache)); } catch(e){}
+    if (info) {   // невдачу НЕ кешуємо — інакше «—» залипає на 30 хв після одного мережевого фейлу
+      standingCache[id] = { ts, at: Date.now(), atLeast };
+      try { localStorage.setItem('standingCache', JSON.stringify(standingCache)); } catch(e){}
+    }
   }
   if (ts == null) return '—';
   return (atLeast ? '≥ ' : '') + fmtStanding(now - ts);
@@ -785,11 +810,20 @@ async function periodReport(id, from, to) {
   // 1) одометр — точно і дешево
   const odoKmP = dayMileage(id, from, to);
 
-  // 2) усі повідомлення періоду — лише потрібні поля (при 2-сек піллінгу за день це тисячі рядків; вузький fields = легший і швидший запит)
-  const data = encodeURIComponent(JSON.stringify({ from, to, count:40000,
-    fields:'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level' }));
-  let msgs = [];
-  try { msgs = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e) { msgs = []; }
+  // 2) усі повідомлення періоду — лише потрібні поля, З ПАГІНАЦІЄЮ: при 2-сек піллінгу тиждень/місяць — це
+  // СОТНІ тисяч рядків, а один запит віддає перші 40к → місячний звіт мовчки покривав лише перші дні
+  // (і odoKm за весь місяць проти gpsKm за огризок давав фальшивий «⚠ РЕБ»)
+  const FIELDS = 'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level';
+  let msgs = [], pageFrom = from, truncated = false;
+  for (let page = 0; page < 10; page++) {                       // до 400к повідомлень; далі чесно позначаємо обрізання
+    const data = encodeURIComponent(JSON.stringify({ from: pageFrom, to, count:40000, fields: FIELDS }));
+    let batch = [];
+    try { batch = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e) { break; }
+    msgs = msgs.concat(batch);
+    if (batch.length < 40000) break;                            // остання (неповна) пачка — все зібрано
+    pageFrom = (batch[batch.length-1].timestamp || pageFrom) + 0.001;
+    if (page === 9) truncated = true;
+  }
   msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
 
   const tank = tankFor(id);
@@ -847,7 +881,8 @@ async function periodReport(id, from, to) {
         const dm = haversine(prevPt, pt);
         const dt = (prevTs != null) ? (ts - prevTs) : 0;
         const kmh = (dt > 0) ? (dm / dt * 3.6) : 0;
-        teleport = (dm > JITTER_M && kmh >= 200);        // фізично неможлива швидкість — глюк/стрибок, не рух
+        // dt<=0 (буферизовані пачки з однаковим часом) обходив фільтр: стрибок з kmh=0 проходив як «рух»
+        teleport = (dt <= 0) ? (dm > JITTER_M) : (dm > JITTER_M && kmh >= 200);
         if (dm > JITTER_M && !teleport) gpsM += dm;      // реальний рух; телепорти й дрижання — мимо
       }
       prevPt = pt; prevTs = ts;
@@ -938,7 +973,7 @@ async function periodReport(id, from, to) {
   for (const s of spdS) if (s[1] > maxSpd) maxSpd = s[1];
   maxSpd = Math.round(maxSpd);
 
-  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd,
+  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated,
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
@@ -1033,8 +1068,6 @@ function periodRange(p){
   const now = Math.floor(Date.now()/1000);
   const dm = /^d(\d+)$/.exec(p);
   if (dm) { const i = +dm[1]; const t0 = startOfDay() - i*86400; return [t0, i === 0 ? now : t0 + 86400]; }
-  if (p === 'today') return [startOfDay(), now];
-  if (p === 'yest') { const t = startOfDay(); return [t-86400, t]; }
   if (p === 'week') return [now - 7*86400, now];
   const d = new Date(); d.setDate(1); d.setHours(0,0,0,0);
   return [Math.floor(d/1000), now];
@@ -1048,7 +1081,9 @@ function focusEvt(lat, lon, label){
   if (el) el.scrollIntoView({ behavior:'smooth', block:'center' });
 }
 
+let _loadSeq = 0;   // токен покоління: швидке перемикання вкладок не дає «повільному місяцю» перетерти свіжу вкладку
 async function loadPeriod(el) {
+  const seq = ++_loadSeq;
   document.querySelectorAll('#detail .tab').forEach(t=>t.classList.remove('active'));
   el.classList.add('active');
   const p = el.dataset.p;
@@ -1059,10 +1094,11 @@ async function loadPeriod(el) {
 
   let r;
   try { r = await periodReport(curDetail.id, from, to); }
-  catch(e){ out.innerHTML = '<div class="muted">помилка: '+e.message+'</div>'; return; }
+  catch(e){ if (seq === _loadSeq) out.innerHTML = '<div class="muted">помилка: '+e.message+'</div>'; return; }
+  if (seq !== _loadSeq) return;   // поки рахували, користувач уже перемкнувся на іншу вкладку
 
   const f = (v,u)=> v!=null ? v.toLocaleString('uk-UA')+' '+u : '—';
-  const jammed = (r.odoKm != null && r.odoKm > 2 && r.gpsKm < r.odoKm*0.5);
+  const jammed = !r.truncated && (r.odoKm != null && r.odoKm > 2 && r.gpsKm < r.odoKm*0.5);   // при обрізаних даних порівняння некоректне
   out.innerHTML = `
     <div class="section">
       <h3>Зведення</h3>

@@ -1,7 +1,7 @@
 // Service worker — застосунок ставиться як додаток і працює офлайн.
 // Стратегія: код (html/js) — мережа-перша (оновлення видно одразу), статика — кеш-перша.
 // API flespi НЕ кешуємо — дані завжди свіжі.
-const CACHE = 'avtopark-v54';
+const CACHE = 'avtopark-v55';
 const SHELL = [
   './',
   './index.html',
@@ -33,12 +33,13 @@ self.addEventListener('fetch', e => {
     return;
   }
   // тайли карт — мережа, без кешу
-  if (url.includes('tile') || url.includes('google.com/vt') || url.includes('arcgisonline') || url.includes('basemaps.cartocdn')) {
+  if (url.includes('tile') || url.includes('google.com/vt')) {
     e.respondWith(fetch(e.request).catch(() => new Response('', { status: 503 })));
     return;
   }
-  // наш код (index.html, app.js, sw, manifest) — мережа-перша, кеш як запас офлайн
-  if (url.includes('/avtopark/') && (url.endsWith('.html') || url.endsWith('.js') || url.endsWith('/') || url.endsWith('.json'))) {
+  // наш код (index.html, app.js, sw, manifest) — мережа-перша, кеш як запас офлайн.
+  // Прив'язка до origin, а не до шляху '/avtopark/' — інакше на іншому хостингу код «залипав» би в кеші.
+  if (url.startsWith(self.location.origin) && (url.endsWith('.html') || url.endsWith('.js') || url.endsWith('/') || url.endsWith('.json'))) {
     e.respondWith(
       fetch(e.request).then(r => {
         const copy = r.clone();
