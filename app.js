@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v59';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v60';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1175,7 +1175,8 @@ async function loadPeriod(el) {
       <div class="row"><span class="k">🔥 Витрачено палива</span><span class="val">${f(r.spentL,'л')}</span></div>
       <div class="row"><span class="k">🔴 Злито палива</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>
       ${(r.spentL != null && (curDetail.metadata||{}).fuelPrice) ? `<div class="row"><span class="k">💰 Вартість пального</span><span class="val" style="color:var(--accent)">≈ ${Math.round(r.spentL * curDetail.metadata.fuelPrice).toLocaleString('uk-UA')} грн</span></div>` : ''}
-      ${r.evKwh != null ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--green)">≈ ${r.evKwh} кВт·год</span></div>` : ''}
+      ${r.evKwh != null ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--green)">≈ ${r.evKwh} кВт·год</span></div>`
+        : (((curDetail.metadata||{}).ev && !(curDetail.metadata||{}).batteryKwh) ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--dim);font-size:12px">авто не віддає % батареї — див. оцінку по пробігу ↓</span></div>` : '')}
       ${r.evCost != null ? `<div class="row"><span class="k">💰 Вартість зарядки</span><span class="val" style="color:var(--accent)">≈ ${r.evCost.toLocaleString('uk-UA')} грн</span></div>` : ''}
       ${(() => { const md = curDetail.metadata||{}; if (!md.ev || !md.kwhPerKm || !md.elPrice || r.odoKm == null || r.odoKm < 1) return '';
         const kwh = Math.round(r.odoKm * md.kwhPerKm * 10)/10, uah = Math.round(kwh * md.elPrice);
