@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v55';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v56';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -238,6 +238,20 @@ async function checkFaults(devId) {
   } finally {
     delete _faultsInflight[devId];
   }
+}
+
+// ===== Розрахунковий баланс SIM (заліза для USSD у FMB003 нема — ведемо чесну бухгалтерію) =====
+// metadata: simBalance (грн на дату simBalanceDate) − simFee (грн/міс, списується 1-го числа).
+// Після кожного поповнення користувач каже суму — оновлюємо simBalance/simBalanceDate у метаданих.
+function simEstimate(md){
+  if (!md || md.simBalance == null || !md.simBalanceDate || !md.simFee) return null;
+  const start = new Date(md.simBalanceDate + 'T00:00:00');
+  const now = new Date();
+  if (isNaN(start) || now < start) return null;
+  // скільки списань 1-го числа минуло ПІСЛЯ дати відліку
+  const crossings = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+  const est = Math.round((md.simBalance - crossings * md.simFee) * 100) / 100;
+  return { est, low: est < md.simFee + 2 };   // «мало» = не вистачить на наступне списання (+2 грн запасу)
 }
 
 // ===== Стан акумулятора / звʼязку / супутників (діагностика) =====
@@ -487,6 +501,11 @@ function renderCards(devs) {
     if (gsm) diag.push(`📶 ${gsm.label}`);
     if (sats != null) diag.push(`🛰️ ${sats}`);
     if (!active) diag.push(`🅿️ <span id="st_${d.id}">…</span>`);   // скільки стоїть (простій) — і для офлайн
+    // розрахунковий баланс SIM: постійно у діагностиці, а коли не вистачає на наступне списання — червона тривога
+    const se = simEstimate(d.metadata);
+    if (se) diag.push(se.low
+      ? `<span style="color:var(--red);font-weight:700">💳 SIM ≈${se.est} грн — поповни до 1-го числа!</span>`
+      : `💳 SIM ≈${se.est} грн`);
     const diagHtml = diag.length
       ? `<div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--dim);flex-wrap:wrap">${diag.map(x=>`<span>${x}</span>`).join('')}</div>`
       : '';
@@ -1111,6 +1130,7 @@ async function loadPeriod(el) {
       <div class="row"><span class="k">⛽ Залито палива</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
       <div class="row"><span class="k">🔥 Витрачено палива</span><span class="val">${f(r.spentL,'л')}</span></div>
       <div class="row"><span class="k">🔴 Злито палива</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>
+      ${(r.spentL != null && (curDetail.metadata||{}).fuelPrice) ? `<div class="row"><span class="k">💰 Вартість пального</span><span class="val" style="color:var(--accent)">≈ ${Math.round(r.spentL * curDetail.metadata.fuelPrice).toLocaleString('uk-UA')} грн</span></div>` : ''}
     </div>
 
     <div class="section">
