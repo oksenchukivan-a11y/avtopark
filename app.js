@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v57';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v58';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -832,7 +832,7 @@ async function periodReport(id, from, to) {
   // 2) усі повідомлення періоду — лише потрібні поля, З ПАГІНАЦІЄЮ: при 2-сек піллінгу тиждень/місяць — це
   // СОТНІ тисяч рядків, а один запит віддає перші 40к → місячний звіт мовчки покривав лише перші дні
   // (і odoKm за весь місяць проти gpsKm за огризок давав фальшивий «⚠ РЕБ»)
-  const FIELDS = 'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level';
+  const FIELDS = 'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level,can.vehicle.battery.level';
   let msgs = [], pageFrom = from, truncated = false;
   for (let page = 0; page < 10; page++) {                       // до 400к повідомлень; далі чесно позначаємо обрізання
     const data = encodeURIComponent(JSON.stringify({ from: pageFrom, to, count:40000, fields: FIELDS }));
@@ -849,6 +849,7 @@ async function periodReport(id, from, to) {
   const track = [];
   let gpsM = 0, prevPt = null, prevTs = null, lastTrackPt = null;
   let firstFuel = null, lastFuel = null, prevFuel = null;
+  let prevSoc = null, prevSocTs = null; const charges = [];   // ⚡ сесії зарядки електрички: зростання SoC на стоянці
   const fills = [], drains = [];
   const stops = [];
   let stopStart = null, stopPt = null, stopOdo = null, curOdo = null;
@@ -943,6 +944,24 @@ async function periodReport(id, from, to) {
       }
       prevFuel = flv;
     }
+
+    // ⚡ ЗАРЯДКА електрички: SoC росте на стоянці. Сесії ближче 30 хв зливаємо в одну (нічна зарядка = одна подія).
+    const soc = m['can.vehicle.battery.level'];
+    if (soc != null && soc > 0 && soc <= 100) {
+      if (prevSoc != null && soc > prevSoc && (sp == null || sp < 3)) {
+        const dpct = soc - prevSoc;
+        // допустимий приріст МАСШТАБУЄТЬСЯ часом між замірами: вночі трекер спить, і зарядка +50%
+        // приходить одним стрибком уранці — це не глюк. Повільна зарядка ≈25%/год (+5% запас).
+        const hrs = prevSocTs != null ? Math.max(0, (ts - prevSocTs) / 3600) : 0;
+        const maxRise = Math.min(100, hrs * 25 + 5);
+        if (dpct <= maxRise) {
+          const lastC = charges[charges.length-1];
+          if (lastC && ts - lastC.endTs < 1800) { lastC.pct += dpct; lastC.endTs = ts; }
+          else charges.push({ ts, endTs: ts, pct: dpct, pt: prevPt });
+        }
+      }
+      prevSoc = soc; prevSocTs = ts;
+    }
   }
   closeStop(to); // зупинка, що триває досі
 
@@ -998,7 +1017,21 @@ async function periodReport(id, from, to) {
   for (const s of spdS) if (s[1] > maxSpd) maxSpd = s[1];
   maxSpd = Math.round(maxSpd);
 
-  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated,
+  // ⚡ електрика: кВт·год і грн по реальному зростанню SoC (×1.12 — втрати зарядки з розетки)
+  const devMd = (devCache.find(x => x.id === id) || {}).metadata || {};
+  let evKwh = null, evCost = null;
+  const chargedPct = charges.reduce((a,c) => a + c.pct, 0);
+  if (chargedPct >= 2 && devMd.batteryKwh) {
+    evKwh = Math.round(chargedPct / 100 * devMd.batteryKwh * 1.12 * 10) / 10;
+    if (devMd.elPrice) evCost = Math.round(evKwh * devMd.elPrice);
+  }
+  charges.forEach(c => {   // готуємо цифри для стрічки
+    c.kwh = devMd.batteryKwh ? Math.round(c.pct / 100 * devMd.batteryKwh * 1.12 * 10) / 10 : null;
+    c.uah = (c.kwh != null && devMd.elPrice) ? Math.round(c.kwh * devMd.elPrice) : null;
+    c.pct = Math.round(c.pct);
+  });
+
+  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost,
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
@@ -1137,6 +1170,11 @@ async function loadPeriod(el) {
       <div class="row"><span class="k">🔥 Витрачено палива</span><span class="val">${f(r.spentL,'л')}</span></div>
       <div class="row"><span class="k">🔴 Злито палива</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>
       ${(r.spentL != null && (curDetail.metadata||{}).fuelPrice) ? `<div class="row"><span class="k">💰 Вартість пального</span><span class="val" style="color:var(--accent)">≈ ${Math.round(r.spentL * curDetail.metadata.fuelPrice).toLocaleString('uk-UA')} грн</span></div>` : ''}
+      ${r.evKwh != null ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--green)">≈ ${r.evKwh} кВт·год</span></div>` : ''}
+      ${r.evCost != null ? `<div class="row"><span class="k">💰 Вартість зарядки</span><span class="val" style="color:var(--accent)">≈ ${r.evCost.toLocaleString('uk-UA')} грн</span></div>` : ''}
+      ${(() => { const md = curDetail.metadata||{}; if (!md.ev || !md.kwhPerKm || !md.elPrice || r.odoKm == null || r.odoKm < 1) return '';
+        const kwh = Math.round(r.odoKm * md.kwhPerKm * 10)/10, uah = Math.round(kwh * md.elPrice);
+        return `<div class="row"><span class="k">🔌 Витрати е/е по пробігу</span><span class="val">≈ ${kwh} кВт·год · ${uah.toLocaleString('uk-UA')} грн</span></div>`; })()}
     </div>
 
     <div class="section">
@@ -1158,6 +1196,7 @@ async function loadPeriod(el) {
   (r.segments||[]).forEach(s=> items.push({ ts:s.ts, type:'drive', dur:s.dur, km:s.km, maxSpd:s.maxSpd }));
   r.fills.forEach(x=> items.push({ ts:x.ts, type:'fill', l:x.l, pt:x.pt }));
   r.drains.forEach(x=> items.push({ ts:x.ts, type:'drain', l:x.l, pt:x.pt }));
+  (r.charges||[]).forEach(c=> { if (c.pct >= 2) items.push({ ts:c.ts, type:'charge', pct:c.pct, kwh:c.kwh, uah:c.uah, pt:c.pt }); });
   items.sort((a,b)=> a.ts - b.ts);
 
   const tl = document.getElementById('tlOut');
@@ -1173,6 +1212,8 @@ async function loadPeriod(el) {
         return `<div class="ev"><span>🟢 їхав ${fmtDur(it.dur)}${it.km!=null?` · ${it.km} км`:''}${it.maxSpd?` · до ${it.maxSpd} км/г`:''}</span><span class="when">${t}</span></div>`;
       if (it.type === 'fill')
         return `<div class="ev"${tap}><span class="amt up">⛽ заправка +${it.l} л<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
+      if (it.type === 'charge')
+        return `<div class="ev"${tap}><span class="amt up">⚡ зарядка +${it.pct}%${it.kwh!=null?` (≈${it.kwh} кВт·год${it.uah!=null?` · ${it.uah} грн`:''})`:''}<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
       return `<div class="ev"${tap}><span class="amt down">🔴 −${it.l} л злив?<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
     }).join('');
     // адреси подій — асинхронно (кеш + серійна черга, Nominatim не перевантажуємо)
