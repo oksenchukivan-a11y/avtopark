@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v53';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v54';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -371,13 +371,29 @@ try { lastValidPosTs = JSON.parse(localStorage.getItem('lastValidPosTs') || '{}'
 }
 const GPS_LOST_MS = 20 * 60 * 1000;   // якщо валідного фіксу нема довше 20 хв — це вже не «дрижання», а реальна проблема (антена/апаратура)
 
+let _renderFp = '', _renderSkips = 0;
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
   devCache = devs;
   // знімок останнього успішного стану — щоб при наступному відкритті одразу бачити авто (без спінера й без помилки)
   try { localStorage.setItem('devSnapshot', JSON.stringify({ ts: Date.now(), devs })); } catch(e){}
-  renderCards(devs);
-  renderMap(devs);
+  // НЕ перемальовуємо, якщо нічого суттєвого не змінилось (стоянка вночі): менше миготіння/зайвого DOM,
+  // менше жере батарею iPhone. server.timestamp огрублюємо до хвилини, напругу — до 0.1В.
+  // Кожен 5-й пропуск малюємо примусово (щоб «липке» зелене встигало згасати за таймером).
+  const fp = devs.map(d => {
+    const t = d.telemetry || {};
+    return [d.id, Math.floor((tv(t,'server.timestamp')||0)/60), tv(t,'position.speed'), tv(t,'position.valid'),
+            Math.round((tv(t,'external.powersource.voltage')||0)*10), tv(t,'engine.ignition.status'),
+            tv(t,'movement.status'), tv(t,'gnss.state.enum'), tv(t,'can.fuel.volume'), tv(t,'can.fuel.level'),
+            tv(t,'can.vehicle.mileage')].join(',');
+  }).join('|');
+  if (fp === _renderFp && _renderSkips < 5 && document.querySelectorAll('#list .card').length) {
+    _renderSkips++;
+  } else {
+    _renderFp = fp; _renderSkips = 0;
+    renderCards(devs);
+    renderMap(devs);
+  }
   document.getElementById('updated').textContent = 'оновлено ' + new Date().toLocaleTimeString('uk-UA') + ' · ' + APP_VERSION;
 }
 
@@ -673,7 +689,9 @@ async function dayMileage(id, from, to) {
       const [first, last] = await Promise.all([ odoAt(id, from, t, false, field), odoAt(id, from, t, true, field) ]);
       if (first != null && last != null) {
         const d = Math.round(last - first);
-        if (d >= 0 && d <= 3000) km = d;   // негатив/абсурд — краще нічого, ніж дурне число
+        // межа глюків МАСШТАБУЄТЬСЯ періодом: фіксовані 3000 км обрізали чесний МІСЯЧНИЙ пробіг (>3000 за місяць — норма)
+        const maxPlausible = Math.max(1, Math.ceil((t - from) / 86400)) * 1500;   // ≤1500 км/добу
+        if (d >= 0 && d <= maxPlausible) km = d;   // негатив/абсурд (телепорт одометра) — краще нічого, ніж дурне число
       }
     }
     dayMileageCache[key] = { km, at: Date.now() };
@@ -915,8 +933,12 @@ async function periodReport(id, from, to) {
   // «Стояв» = увесь період мінус рух (просто і чесно: ніч/паузи без даних — це теж стоянка)
   const periodEnd = Math.min(to, Math.floor(Date.now()/1000));
   const standSec = Math.max(0, (periodEnd - from) - driveSec);
+  // максимальна швидкість періоду — для контролю водіїв (як ліміт швидкості у Wialon/MegaGPS)
+  let maxSpd = 0;
+  for (const s of spdS) if (s[1] > maxSpd) maxSpd = s[1];
+  maxSpd = Math.round(maxSpd);
 
-  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments,
+  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd,
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
@@ -1046,6 +1068,7 @@ async function loadPeriod(el) {
       <h3>Зведення</h3>
       <div class="row"><span class="k">🟢 У русі</span><span class="val" style="color:var(--green)">${r.driveSec ? fmtDur(r.driveSec) : '—'}</span></div>
       <div class="row"><span class="k">🅿️ Стояв</span><span class="val">${r.standSec ? fmtDur(r.standSec) : '—'}</span></div>
+      ${r.maxSpd ? `<div class="row"><span class="k">🚀 Макс. швидкість</span><span class="val" style="${r.maxSpd > ((curDetail.metadata||{}).speedLimit || 110) ? 'color:var(--red)' : ''}">${r.maxSpd} км/г${r.maxSpd > ((curDetail.metadata||{}).speedLimit || 110) ? ' ⚠ перевищення' : ''}</span></div>` : ''}
       <div class="row"><span class="k">📏 Пробіг з одометра</span><span class="val" style="color:var(--accent)">${f(r.odoKm,'км')}</span></div>
       <div class="row"><span class="k">🛰️ Пробіг по GPS (трек)</span><span class="val">${f(r.gpsKm,'км')}${jammed?' <span style="color:var(--yellow);font-size:11px">⚠ РЕБ</span>':''}</span></div>
       ${jammed?`<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:4px 0">⚠ GPS глушився (РЕБ) — орієнтуйся на одометр</div>`:''}
