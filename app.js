@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v58';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v59';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1157,9 +1157,14 @@ async function loadPeriod(el) {
 
   const f = (v,u)=> v!=null ? v.toLocaleString('uk-UA')+' '+u : '—';
   const jammed = !r.truncated && (r.odoKm != null && r.odoKm > 2 && r.gpsKm < r.odoKm*0.5);   // при обрізаних даних порівняння некоректне
+  // показуємо, ЯКІ дати реально покриває звіт — інакше «Місяць» (з 1-го числа, на початку місяця
+  // коротший за ковзний «Тиждень») збиває з пантелику: тиждень виходив «більший за місяць»
+  const perEnd = Math.min(to, Math.floor(Date.now()/1000));
+  const dstr = ts => { const d = new Date(ts*1000); return d.getDate() + '.' + String(d.getMonth()+1).padStart(2,'0'); };
+  const perDays = Math.max(1, Math.round((perEnd - from) / 86400 * 10) / 10);
   out.innerHTML = `
     <div class="section">
-      <h3>Зведення</h3>
+      <h3>Зведення · ${dstr(from)}–${dstr(perEnd)} (${perDays} дн)</h3>
       <div class="row"><span class="k">🟢 У русі</span><span class="val" style="color:var(--green)">${r.driveSec ? fmtDur(r.driveSec) : '—'}</span></div>
       <div class="row"><span class="k">🅿️ Стояв</span><span class="val">${r.standSec ? fmtDur(r.standSec) : '—'}</span></div>
       ${r.maxSpd ? `<div class="row"><span class="k">🚀 Макс. швидкість</span><span class="val" style="${r.maxSpd > ((curDetail.metadata||{}).speedLimit || 110) ? 'color:var(--red)' : ''}">${r.maxSpd} км/г${r.maxSpd > ((curDetail.metadata||{}).speedLimit || 110) ? ' ⚠ перевищення' : ''}</span></div>` : ''}
