@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v56';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v57';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -870,15 +870,12 @@ async function periodReport(id, from, to) {
     const ts = m.timestamp;
     if (ts != null) lastMsgTs = ts;
     const lat = m['position.latitude'], lon = m['position.longitude'];
-    let sp = m['position.speed'];
-    if (sp == null) sp = m['can.vehicle.speed'];
     const od = m['can.vehicle.mileage'];
     if (od != null && od > 0) { curOdo = od; if (stopStart != null && stopOdo == null) stopOdo = od; }  // od>0: ігнор глюків-нулів
     // семпли для відрізків руху (пушимо лише зміни — щоб масиви лишались маленькими)
     if (od != null && od > 0 && (!odoCan.length || odoCan[odoCan.length-1][1] !== od)) odoCan.push([ts, od]);
     const odG = m['vehicle.mileage'];
     if (odG != null && odG > 0 && (!odoGnss.length || odG - odoGnss[odoGnss.length-1][1] > 0.05)) odoGnss.push([ts, odG]);
-    if (sp != null && sp >= 3 && sp < 200) spdS.push([ts, sp]);
 
     // валідність GPS-фіксу — відсікаємо «стрибки» (дефолтна/застаріла позиція без супутників)
     const valid = m['position.valid'];
@@ -889,6 +886,15 @@ async function periodReport(id, from, to) {
     else goodFix = true;
     // дефолтна точка трекера (Ліма) зрідка приходить НАВІТЬ з valid=true — географічний щит обовʼязковий
     if (lat != null && lon != null && !saneRegion(lat, lon)) goodFix = false;
+
+    // ШВИДКІСТЬ: пріоритет — спідометр авто по CAN (РЕБ-стійкий, не бреше). GPS-швидкість беремо ЛИШЕ
+    // з валідним фіксом: під глушінням телепорти давали фантомні «199 км/г» у макс. швидкість дня.
+    // Зверху фізична межа 170 (фургон швидше не їде — усе вище це глюк, навіть із «валідним» фіксом).
+    const spCan = m['can.vehicle.speed'], spGps = m['position.speed'];
+    let sp = null;
+    if (spCan != null && spCan >= 0 && spCan < 170) sp = spCan;
+    else if (spGps != null && goodFix && spGps < 170) sp = spGps;
+    if (sp != null && sp >= 3) spdS.push([ts, sp]);
 
     // трек + GPS-відстань (тільки валідні точки, без телепортів)
     const hdop = m['position.hdop'];
