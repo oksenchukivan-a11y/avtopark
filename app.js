@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v61';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v62';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -223,6 +223,7 @@ async function checkFaults(devId) {
       const c = res && res[0];
       if (c && c.executed) {
         const txt = c.response || '';
+        if (txt) localStorage.setItem('faults:' + devId, JSON.stringify({ ts: Date.now(), txt: String(txt).slice(0, 500) }));   // ручна перевірка теж оновлює кеш авто-перевірки
         if (/no fault codes/i.test(txt)) {
           el.innerHTML = '<span style="color:#2ecc71">✅ Помилок не виявлено (блок авто відповів напряму)</span>';
         } else {
@@ -238,6 +239,53 @@ async function checkFaults(devId) {
   } finally {
     delete _faultsInflight[devId];
   }
+}
+
+// ===== АВТО-опитування помилок: 2 рази на добу, поки застосунок відкритий =====
+// Помилки двигуна не зникають самі (лампа горить, поки не полагодиш) — тому частіше питати нема сенсу,
+// а трафік команди копійчаний (~0.5 КБ). Команда лежить у черзі до 6 год і виконується, щойно трекер
+// виходить на звʼязок (вранці із запуском двигуна). Результат кешується локально й видно в детальці.
+const FAULTS_STALE_MS = 12 * 3600 * 1000;
+function faultsCache(devId){ try { return JSON.parse(localStorage.getItem('faults:' + devId)) || null; } catch(e){ return null; } }
+function faultsBad(txt){ return /[PBCU][0-9]{3,4}/i.test(txt || ''); }   // у відповіді є реальний DTC-код
+let _autoFaultsAt = 0;
+const _autoPolling = {};
+async function autoFaultsSweep(devs){
+  if (Date.now() - _autoFaultsAt < 3600 * 1000) return;   // легкий на запити: цикл не частіше 1 разу/год
+  _autoFaultsAt = Date.now();
+  for (const d of devs) {
+    const c = faultsCache(d.id);
+    if (c && c.ts && Date.now() - c.ts < FAULTS_STALE_MS) continue;                       // свіже — пропускаємо
+    if (c && c.pendingCmd && Date.now() - (c.postedAt || 0) < 6 * 3600 * 1000) {          // команда ще в черзі — дочекаємось її
+      pollAutoFaults(d.id, c.pendingCmd); continue;
+    }
+    try {
+      const posted = await api(`/gw/devices/${d.id}/commands-queue`, 'POST',
+        [{ name:'custom', properties:{ text:'faultcodes' }, max_attempts: 20, ttl: 21600 }]);
+      const cmdId = posted && posted[0] && posted[0].id;
+      if (cmdId) {
+        localStorage.setItem('faults:' + d.id, JSON.stringify({ ts: (c && c.ts) || 0, txt: (c && c.txt) || '', pendingCmd: cmdId, postedAt: Date.now() }));
+        pollAutoFaults(d.id, cmdId);
+      }
+    } catch(e){ /* тихо: наступний цикл повторить */ }
+  }
+}
+async function pollAutoFaults(devId, cmdId){
+  if (_autoPolling[devId]) return;
+  _autoPolling[devId] = true;
+  try {
+    for (let i = 0; i < 16; i++) {                    // ~12 хв по 45 с — не тисне на ліміт flespi
+      let res;
+      try { res = await api(`/gw/devices/${devId}/commands-result/${cmdId}`); } catch(e){ return; }
+      const c = res && res[0];
+      if (c && c.executed && c.response) {
+        localStorage.setItem('faults:' + devId, JSON.stringify({ ts: Date.now(), txt: String(c.response).slice(0, 500) }));
+        return;
+      }
+      if (c && c.executed === false) return;          // команда протухла невиконаною — новий цикл поставить свіжу
+      await new Promise(r => setTimeout(r, 45000));
+    }
+  } finally { delete _autoPolling[devId]; }
 }
 
 // ===== Розрахунковий баланс SIM (заліза для USSD у FMB003 нема — ведемо чесну бухгалтерію) =====
@@ -528,6 +576,9 @@ function renderCards(devs) {
     const et = engineTemp(tel), dtc = dtcCount(tel);
     const alerts = [];
     if (dtc != null && dtc > 0) alerts.push(`🛑 ${dtc} ${dtc===1?'помилка':'помилки'} двигуна`);
+    // авто-перевірка faultcodes знайшла коди (для авто без пасивного лічильника; без дубля з рядком вище)
+    const fcA = faultsCache(d.id);
+    if (!(dtc != null && dtc > 0) && fcA && fcA.ts && faultsBad(fcA.txt)) alerts.push('🛑 помилки двигуна (OBD)');
     if (et != null && et >= 110) alerts.push(`🌡️ перегрів ${Math.round(et)}°C`);
     const alertHtml = alerts.length ? `<div style="margin-top:6px;font-size:12px;color:#e74c3c;font-weight:700">${alerts.join(' · ')}</div>` : '';
     // SIM-підозра: авто довго мовчить, тоді як ІНШІ на звʼязку (отже не РЕБ і не збій flespi, а саме ця сімка/покриття).
@@ -1075,6 +1126,15 @@ function openDetail(d) {
   if (ab != null) obdRows.push(`<div class="row"><span class="k">💧 AdBlue</span><span class="val">${Math.round(ab)} %</span></div>`);
   // ЖИВА перевірка помилок для БУДЬ-ЯКОГО авто: OBD-команда faultcodes через flespi (працює на всіх 5, перевірено).
   // Пасивний can.dtc.number шле лише Kangoo 8440 — а кнопка опитує сам блок авто напряму, будь-коли.
+  // кешований результат авто-перевірки (2 рази/добу) — з часом, коли авто востаннє відповіло
+  (() => { const fc = faultsCache(d.id); if (!fc || !fc.ts) return;
+    const bad = faultsBad(fc.txt), clean = /no fault codes/i.test(fc.txt || '');
+    const dt = new Date(fc.ts);
+    const when = dt.getDate() + '.' + String(dt.getMonth()+1).padStart(2,'0') + ' ' + dt.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
+    const body = bad ? `<span style="color:#e74c3c">🛑 ${esc(fc.txt)}</span>`
+      : clean ? `<span style="color:#2ecc71">чисто ✅</span>`
+      : `<span style="color:var(--dim)">${esc(fc.txt)}</span>`;
+    obdRows.push(`<div class="row"><span class="k">🛠️ Авто-перевірка помилок</span><span class="val">${body} <span style="color:var(--dim);font-size:11px">· ${when}</span></span></div>`); })();
   obdRows.push(`<div class="row"><span class="k">🔍 Живе опитування помилок</span><span class="val"><button class="btn-sm btn" style="padding:7px 12px" onclick="event.stopPropagation();checkFaults(${d.id})">Перевірити</button></span></div>`);
   obdRows.push(`<div id="faults_${d.id}" class="muted" style="display:none"></div>`);
   const obdBlock = `<div class="section"><h3>Двигун / OBD</h3>${obdRows.join('')}</div>`;
@@ -1282,6 +1342,7 @@ async function refresh() {
   _refreshing = true;
   try {
     await loadDevices();
+    autoFaultsSweep(devCache).catch(()=>{});   // фонове авто-опитування помилок (сам гейтить частоту)
   } catch(e) {
     // М'ЯКО: якщо на екрані вже є дані — просто тиха «оновлюю…», без червоної помилки.
     // api() і так робить 3 ретраї з паузою, і наступний цикл майже завжди вдалий — користувачу не треба це бачити.
