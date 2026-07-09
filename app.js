@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v60';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v61';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1175,6 +1175,14 @@ async function loadPeriod(el) {
       <div class="row"><span class="k">🔥 Витрачено палива</span><span class="val">${f(r.spentL,'л')}</span></div>
       <div class="row"><span class="k">🔴 Злито палива</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>
       ${(r.spentL != null && (curDetail.metadata||{}).fuelPrice) ? `<div class="row"><span class="k">💰 Вартість пального</span><span class="val" style="color:var(--accent)">≈ ${Math.round(r.spentL * curDetail.metadata.fuelPrice).toLocaleString('uk-UA')} грн</span></div>` : ''}
+      ${(() => { // середній розхід л/100км: витрачені літри ÷ пробіг (одометр надійніший за GPS під РЕБ)
+        const md = curDetail.metadata||{}; if (md.ev) return '';
+        const km = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed) ? r.gpsKm : null);
+        if (km == null || !r.spentL) return '';
+        const per100 = Math.round(r.spentL / km * 1000) / 10;
+        const norm = md.kmPerLiter ? Math.round(1000 / md.kmPerLiter) / 10 : null;
+        const hot = norm != null && per100 > norm * 1.2;   // >120% норми — червоним
+        return `<div class="row"><span class="k">⛽ Середній розхід</span><span class="val" style="${hot?'color:var(--red)':''}">${per100.toLocaleString('uk-UA')} л/100км${norm!=null?` <span style="color:var(--dim);font-size:11px">(норма ≈${norm.toLocaleString('uk-UA')})</span>`:''}${hot?' ⚠':''}</span></div>`; })()}
       ${r.evKwh != null ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--green)">≈ ${r.evKwh} кВт·год</span></div>`
         : (((curDetail.metadata||{}).ev && !(curDetail.metadata||{}).batteryKwh) ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--dim);font-size:12px">авто не віддає % батареї — див. оцінку по пробігу ↓</span></div>` : '')}
       ${r.evCost != null ? `<div class="row"><span class="k">💰 Вартість зарядки</span><span class="val" style="color:var(--accent)">≈ ${r.evCost.toLocaleString('uk-UA')} грн</span></div>` : ''}
