@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v65';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v66';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -35,6 +35,11 @@ function logout() {
 }
 
 // ===== API (з ретраями — flespi інколи віддає порожнє) =====
+// 401/403 НЕ означає одразу мертвий токен: flespi зрідка відповідає так і на живий ключ
+// (перехідні блокування/ліміти). Розлогінюємось лише після 3 таких відповідей ПОСПІЛЬ,
+// без жодного успішного запиту між ними (v66: раніше викидало з першої — Іван ловив
+// «Токен недійсний» на робочому токені).
+let _authFails = 0;
 async function api(path, method, body) {
   let last;
   for (let i = 0; i < 3; i++) {
@@ -42,7 +47,10 @@ async function api(path, method, body) {
       const opt = { method: method || 'GET', headers: { Authorization: 'FlespiToken ' + token() } };
       if (body != null) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
       const r = await fetch(FLESPI + path, opt);
-      if (r.status === 401 || r.status === 403) throw new Error('AUTH');
+      if (r.status === 401 || r.status === 403) {
+        if (++_authFails >= 3) { alert('Токен недійсний — введи ключ заново'); logout(); throw new Error('AUTH'); }
+        last = 'auth'; await new Promise(res=>setTimeout(res, 1200*(i+1))); continue;
+      }
       const txt = await r.text();
       if (!txt) { last = 'empty'; await new Promise(res=>setTimeout(res, 800*(i+1))); continue; }
       const j = JSON.parse(txt);
@@ -52,9 +60,10 @@ async function api(path, method, body) {
         if (/limit/i.test(reason)) { last = reason; await new Promise(res=>setTimeout(res, 1500*(i+1))); continue; }
         throw new Error(reason);
       }
+      _authFails = 0;   // успішна відповідь = токен живий
       return j.result;
     } catch (e) {
-      if (e.message === 'AUTH') { alert('Токен недійсний'); logout(); throw e; }
+      if (e.message === 'AUTH') throw e;
       last = e.message;
     }
   }
