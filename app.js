@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v64';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v65';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -967,7 +967,7 @@ async function periodReport(id, from, to) {
       // Пушимо нову точку лише коли відійшли достатньо від ОСТАННЬОЇ НАМАЛЬОВАНОЇ (не від кожного сирого фіксу),
       // і не телепорт (інакше на карті буде кривий стрибок-лінія через увесь маршрут).
       if (goodPrecision && !teleport && (!lastTrackPt || haversine(lastTrackPt, pt) > TRACK_MIN_M)) {
-        track.push(pt); lastTrackPt = pt;
+        track.push([pt[0], pt[1], ts]); lastTrackPt = pt;   // третій елемент — час: щоб тап по «Їхав» вирізав шматок треку
       }
     }
 
@@ -1139,7 +1139,12 @@ function openDetail(d) {
   obdRows.push(`<div id="faults_${d.id}" class="muted" style="display:none"></div>`);
   const obdBlock = `<div class="section"><h3>Двигун / OBD</h3>${obdRows.join('')}</div>`;
 
+  // карта — ЗВЕРХУ і «липка» (як у Wialon/MegaGPS): відкрив авто → одразу бачиш, де воно і маршрут;
+  // стрічка й цифри прокручуються ПІД картою, карта лишається на екрані
   document.getElementById('dBody').innerHTML = `
+    <div class="mapwrap"><div id="dMap" class="dmap"></div></div>
+    <div class="tabs">${dayTabsHtml()}</div>
+    <div id="periodOut"><div class="spinner">…</div></div>
     <div class="section">
       <h3>Зараз</h3>
       <div style="display:flex; gap:24px; align-items:baseline">
@@ -1150,10 +1155,7 @@ function openDetail(d) {
       ${diagBlock}
       <button class="reboot" onclick="rebootTracker(${d.id})">🔄 Перезавантажити трекер</button>
     </div>
-    ${obdBlock}
-    <div class="tabs">${dayTabsHtml()}</div>
-
-    <div id="periodOut"><div class="spinner">…</div></div>`;
+    ${obdBlock}`;
 
   // простій у деталях (асинхронно)
   const dOnline = statusOnline(tel), dActive = isActive(d, tel, dOnline);
@@ -1165,7 +1167,7 @@ function openDetail(d) {
   }
 
   // деталеву мапу перестворюємо
-  if (dMap) { dMap.remove(); dMap = null; }
+  if (dMap) { dMap.remove(); dMap = null; } _segHl = null;
   loadPeriod(document.querySelector('#detail .tab.active'));
 }
 
@@ -1190,13 +1192,25 @@ function periodRange(p){
   const d = new Date(); d.setDate(1); d.setHours(0,0,0,0);
   return [Math.floor(d/1000), now];
 }
-// тап по події стрічки → показати місце на карті деталей
+// тап по події стрічки → показати місце на карті (карта липка зверху — скролити не треба)
 function focusEvt(lat, lon, label){
   if (!dMap || lat == null) return;
+  if (_segHl) { dMap.removeLayer(_segHl); _segHl = null; }
   dMap.setView([lat, lon], 16);
   L.popup({ closeButton:true }).setLatLng([lat, lon]).setContent(label).openOn(dMap);
-  const el = document.getElementById('dMap');
-  if (el) el.scrollIntoView({ behavior:'smooth', block:'center' });
+}
+// тап по відрізку «Їхав» → підсвітити САМЕ ЦЕЙ шматок маршруту (фішка з MegaGPS, яку вибрав Іван)
+let _dRep = null, _segHl = null;
+function focusSeg(si){
+  if (!dMap || !_dRep || !_dRep.segments || !_dRep.segments[si]) return;
+  const s = _dRep.segments[si];
+  const t0 = s.ts - 60, t1 = s.ts + s.dur + 60;   // ±хвилина запасу: трек проріджений, краї можуть не збігатись
+  const pts = (_dRep.track || []).filter(p => p[2] != null && p[2] >= t0 && p[2] <= t1);
+  if (pts.length < 2) return;                      // під РЕБ шматка треку може не бути — тоді нічого не міняємо
+  if (_segHl) { dMap.removeLayer(_segHl); _segHl = null; }
+  _segHl = L.polyline(pts.map(p=>[p[0],p[1]]), { color:'#f39c12', weight:6, opacity:.95 }).addTo(dMap);
+  _segHl.bindPopup(`${s.km != null ? s.km + ' км · ' : ''}${fmtDur(s.dur)}${s.maxSpd ? ' · до ' + s.maxSpd + ' км/г' : ''}`);
+  dMap.fitBounds(_segHl.getBounds(), { padding:[30,30] });
 }
 
 let _loadSeq = 0;   // токен покоління: швидке перемикання вкладок не дає «повільному місяцю» перетерти свіжу вкладку
@@ -1208,7 +1222,7 @@ async function loadPeriod(el) {
   const [from, to] = periodRange(p);
   const out = document.getElementById('periodOut');
   out.innerHTML = '<div class="spinner">рахую…</div>';
-  if (dMap) { dMap.remove(); dMap = null; }
+  if (dMap) { dMap.remove(); dMap = null; } _segHl = null;
 
   let r;
   try { r = await periodReport(curDetail.id, from, to); }
@@ -1264,12 +1278,7 @@ async function loadPeriod(el) {
     </div>
 
     <div class="section">
-      <h3>Трек і зупинки (≥3 хв)</h3>
-      <div id="dMap" class="dmap"></div>
-    </div>
-
-    <div class="section">
-      <h3>Стрічка дня</h3>
+      <h3>Стрічка дня <span style="font-weight:400;text-transform:none;letter-spacing:0">· тап по «Їхав» — відрізок на карті</span></h3>
       <div id="tlOut"><div class="muted">…</div></div>
     </div>`;
 
@@ -1278,8 +1287,9 @@ async function loadPeriod(el) {
 
   // ===== СТРІЧКА ДНЯ: зупинки + відрізки руху + заправки/зливи, хронологічно, тап → місце на карті =====
   const items = [];
+  _dRep = r;   // для focusSeg (тап по відрізку «Їхав»)
   r.stops.forEach((s,i)=> items.push({ ts:s.ts, type:'stop', n:i+1, dur:s.dur, pt:s.pt }));
-  (r.segments||[]).forEach(s=> items.push({ ts:s.ts, type:'drive', dur:s.dur, km:s.km, maxSpd:s.maxSpd }));
+  (r.segments||[]).forEach((s,si)=> items.push({ ts:s.ts, type:'drive', dur:s.dur, km:s.km, maxSpd:s.maxSpd, si }));
   r.fills.forEach(x=> items.push({ ts:x.ts, type:'fill', l:x.l, pt:x.pt }));
   r.drains.forEach(x=> items.push({ ts:x.ts, type:'drain', l:x.l, pt:x.pt }));
   (r.charges||[]).forEach(c=> { if (c.pct >= 2) items.push({ ts:c.ts, type:'charge', pct:c.pct, kwh:c.kwh, uah:c.uah, pt:c.pt }); });
@@ -1294,7 +1304,9 @@ async function loadPeriod(el) {
     tl.innerHTML = '<div class="tl">' + items.map((it,k)=>{
       const t = fmtTime(it.ts);
       const b = badge[it.type] || ['#7d8b99','•'];
-      const tap = it.pt ? ` onclick="focusEvt(${it.pt[0]},${it.pt[1]},'${t}')" style="cursor:pointer"` : '';
+      const tap = it.type === 'drive'
+        ? ` onclick="focusSeg(${it.si})" style="cursor:pointer"`
+        : (it.pt ? ` onclick="focusEvt(${it.pt[0]},${it.pt[1]},'${t}')" style="cursor:pointer"` : '');
       let t1 = '', t2 = it.pt ? '…' : '';
       if (it.type === 'stop')   t1 = `№${it.n} стояв ${fmtDur(it.dur)}`;
       if (it.type === 'drive') { t1 = `Їхав ${fmtDur(it.dur)}`; t2 = [it.km!=null?`${it.km} км`:null, it.maxSpd?`до ${it.maxSpd} км/г`:null].filter(Boolean).join(' · '); }
@@ -1322,12 +1334,14 @@ function drawTrack(track, stops) {
   bl['Карта'].addTo(dMap);
   L.control.layers(bl, {}, { position:'topright' }).addTo(dMap);
 
+  const oldMsg = document.getElementById('dMapMsg');   // карта тепер поза periodOut і живе між вкладками — старе повідомлення прибираємо самі
+  if (oldMsg) oldMsg.remove();
   if (!track.length) {
     dMap.setView([50.9,34.8], 9);
-    el.insertAdjacentHTML('afterend','<div class="muted" style="margin-top:8px">за період треку немає</div>');
+    el.insertAdjacentHTML('afterend','<div class="muted" id="dMapMsg" style="margin-top:8px">за період треку немає</div>');
     return;
   }
-  const line = L.polyline(track, { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(dMap);
+  const line = L.polyline(track.map(p=>[p[0],p[1]]), { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(dMap);
   // старт / фініш
   L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(dMap).bindPopup('Старт');
   L.circleMarker(track[track.length-1], { radius:6, color:'#e74c3c', fillColor:'#e74c3c', fillOpacity:1 }).addTo(dMap).bindPopup('Кінець');
@@ -1343,7 +1357,7 @@ function drawTrack(track, stops) {
 function closeDetail(){
   document.getElementById('detail').classList.remove('show');
   curDetail = null;
-  if (dMap) { dMap.remove(); dMap = null; }
+  if (dMap) { dMap.remove(); dMap = null; } _segHl = null;
 }
 
 // ===== Оновлення =====

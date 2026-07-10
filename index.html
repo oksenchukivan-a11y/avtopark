@@ -48,7 +48,11 @@
 
   /* МАПА */
   #map { height:38vh; min-height:240px; background:var(--card); }
-  .dmap { height:240px; border-radius:12px; overflow:hidden; background:var(--card2); }
+  /* карта деталей — зверху і липка (v65): стрічка прокручується під нею, карта завжди на екрані */
+  .mapwrap { position:sticky; top:0; z-index:600;
+    margin:-16px calc(-16px - env(safe-area-inset-right)) 0 calc(-16px - env(safe-area-inset-left));
+    background:var(--bg); box-shadow:0 6px 16px rgba(0,0,0,.35); }
+  .dmap { height:38vh; min-height:240px; border-radius:0 0 14px 14px; overflow:hidden; background:var(--card2); }
   .leaflet-control-layers { background:var(--card) !important; color:var(--txt); border:1px solid var(--line) !important; }
   .leaflet-control-layers-expanded { padding:8px 10px; }
   .reboot { margin-top:14px; width:100%; padding:12px; border-radius:10px; border:1px solid var(--line);
