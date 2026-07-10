@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v62';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v63';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1222,33 +1222,45 @@ async function loadPeriod(el) {
   const perEnd = Math.min(to, Math.floor(Date.now()/1000));
   const dstr = ts => { const d = new Date(ts*1000); return d.getDate() + '.' + String(d.getMonth()+1).padStart(2,'0'); };
   const perDays = Math.max(1, Math.round((perEnd - from) / 86400 * 10) / 10);
+  // ===== Зведення «плитками»: 6 головних цифр великими, дрібниці — списком нижче (вибір Івана, v63) =====
+  const md = curDetail.metadata || {};
+  const spdLim = md.speedLimit || 110;
+  // середній розхід л/100км (дизель): витрачені літри ÷ пробіг; одометр надійніший за GPS під РЕБ
+  let per100 = null, normL = null, hotFuel = false;
+  if (!md.ev) {
+    const kmC = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed) ? r.gpsKm : null);
+    if (kmC != null && r.spentL) {
+      per100 = Math.round(r.spentL / kmC * 1000) / 10;
+      normL = md.kmPerLiter ? Math.round(1000 / md.kmPerLiter) / 10 : null;
+      hotFuel = normL != null && per100 > normL * 1.2;   // >120% норми — червоним
+    }
+  }
+  const fmtHM = s => { let h = Math.floor(s/3600), m = Math.round((s%3600)/60); if (m === 60) { h++; m = 0; } return h + ':' + String(m).padStart(2,'0'); };
+  const tiles = [];
+  const tile = (v, k, color) => tiles.push(`<div class="tile"><div class="tv"${color?` style="color:${color}"`:''}>${v}</div><div class="tk">${k}</div></div>`);
+  if (r.odoKm != null) tile(`${r.odoKm.toLocaleString('uk-UA')} <small>км</small>`, 'Пробіг', 'var(--accent)');
+  else if (r.gpsKm != null) tile(`${r.gpsKm.toLocaleString('uk-UA')} <small>км</small>`, 'Пробіг (GPS)', 'var(--accent)');
+  if (per100 != null) tile(`${per100.toLocaleString('uk-UA')} <small>л/100</small>${hotFuel?' ⚠':''}`, normL != null ? `Розхід · норма ${normL.toLocaleString('uk-UA')}` : 'Розхід', hotFuel ? 'var(--red)' : null);
+  if (!md.ev && r.spentL != null) tile(`${r.spentL.toLocaleString('uk-UA')} <small>л</small>`, 'Витрачено');
+  if (r.driveSec) tile(fmtHM(r.driveSec), 'У русі', 'var(--green)');
+  if (r.maxSpd) tile(`${r.maxSpd} <small>км/г</small>${r.maxSpd > spdLim ? ' ⚠' : ''}`, r.maxSpd > spdLim ? 'Макс · перевищення' : 'Макс. швидкість', r.maxSpd > spdLim ? 'var(--red)' : null);
+  if (!md.ev && r.spentL != null && md.fuelPrice) tile(`${Math.round(r.spentL * md.fuelPrice).toLocaleString('uk-UA')} <small>₴</small>`, 'Пальне');
+  if (r.evKwh != null) tile(`${r.evKwh.toLocaleString('uk-UA')} <small>кВт·год</small>`, 'Заряджено', 'var(--green)');
+  if (r.evCost != null) tile(`${r.evCost.toLocaleString('uk-UA')} <small>₴</small>`, 'Зарядка');
+  if (md.ev && md.kwhPerKm && md.elPrice && r.odoKm != null && r.odoKm >= 1) {
+    const kwh = Math.round(r.odoKm * md.kwhPerKm * 10)/10, uah = Math.round(kwh * md.elPrice);
+    tile(`${uah.toLocaleString('uk-UA')} <small>₴</small>`, `Е/е по пробігу · ${kwh.toLocaleString('uk-UA')} кВт·год`);
+  }
   out.innerHTML = `
     <div class="section">
       <h3>Зведення · ${dstr(from)}–${dstr(perEnd)} (${perDays} дн)</h3>
-      <div class="row"><span class="k">🟢 У русі</span><span class="val" style="color:var(--green)">${r.driveSec ? fmtDur(r.driveSec) : '—'}</span></div>
+      <div class="tiles">${tiles.join('')}</div>
+      ${jammed?`<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:0 0 6px">⚠ GPS глушився (РЕБ) — орієнтуйся на одометр</div>`:''}
+      ${!md.ev ? `<div class="row"><span class="k">⛽ Залито</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
+      <div class="row"><span class="k">🔴 Злито</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>` : ''}
       <div class="row"><span class="k">🅿️ Стояв</span><span class="val">${r.standSec ? fmtDur(r.standSec) : '—'}</span></div>
-      ${r.maxSpd ? `<div class="row"><span class="k">🚀 Макс. швидкість</span><span class="val" style="${r.maxSpd > ((curDetail.metadata||{}).speedLimit || 110) ? 'color:var(--red)' : ''}">${r.maxSpd} км/г${r.maxSpd > ((curDetail.metadata||{}).speedLimit || 110) ? ' ⚠ перевищення' : ''}</span></div>` : ''}
-      <div class="row"><span class="k">📏 Пробіг з одометра</span><span class="val" style="color:var(--accent)">${f(r.odoKm,'км')}</span></div>
       <div class="row"><span class="k">🛰️ Пробіг по GPS (трек)</span><span class="val">${f(r.gpsKm,'км')}${jammed?' <span style="color:var(--yellow);font-size:11px">⚠ РЕБ</span>':''}</span></div>
-      ${jammed?`<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:4px 0">⚠ GPS глушився (РЕБ) — орієнтуйся на одометр</div>`:''}
-      <div class="row"><span class="k">⛽ Залито палива</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
-      <div class="row"><span class="k">🔥 Витрачено палива</span><span class="val">${f(r.spentL,'л')}</span></div>
-      <div class="row"><span class="k">🔴 Злито палива</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>
-      ${(r.spentL != null && (curDetail.metadata||{}).fuelPrice) ? `<div class="row"><span class="k">💰 Вартість пального</span><span class="val" style="color:var(--accent)">≈ ${Math.round(r.spentL * curDetail.metadata.fuelPrice).toLocaleString('uk-UA')} грн</span></div>` : ''}
-      ${(() => { // середній розхід л/100км: витрачені літри ÷ пробіг (одометр надійніший за GPS під РЕБ)
-        const md = curDetail.metadata||{}; if (md.ev) return '';
-        const km = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed) ? r.gpsKm : null);
-        if (km == null || !r.spentL) return '';
-        const per100 = Math.round(r.spentL / km * 1000) / 10;
-        const norm = md.kmPerLiter ? Math.round(1000 / md.kmPerLiter) / 10 : null;
-        const hot = norm != null && per100 > norm * 1.2;   // >120% норми — червоним
-        return `<div class="row"><span class="k">⛽ Середній розхід</span><span class="val" style="${hot?'color:var(--red)':''}">${per100.toLocaleString('uk-UA')} л/100км${norm!=null?` <span style="color:var(--dim);font-size:11px">(норма ≈${norm.toLocaleString('uk-UA')})</span>`:''}${hot?' ⚠':''}</span></div>`; })()}
-      ${r.evKwh != null ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--green)">≈ ${r.evKwh} кВт·год</span></div>`
-        : (((curDetail.metadata||{}).ev && !(curDetail.metadata||{}).batteryKwh) ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--dim);font-size:12px">авто не віддає % батареї — див. оцінку по пробігу ↓</span></div>` : '')}
-      ${r.evCost != null ? `<div class="row"><span class="k">💰 Вартість зарядки</span><span class="val" style="color:var(--accent)">≈ ${r.evCost.toLocaleString('uk-UA')} грн</span></div>` : ''}
-      ${(() => { const md = curDetail.metadata||{}; if (!md.ev || !md.kwhPerKm || !md.elPrice || r.odoKm == null || r.odoKm < 1) return '';
-        const kwh = Math.round(r.odoKm * md.kwhPerKm * 10)/10, uah = Math.round(kwh * md.elPrice);
-        return `<div class="row"><span class="k">🔌 Витрати е/е по пробігу</span><span class="val">≈ ${kwh} кВт·год · ${uah.toLocaleString('uk-UA')} грн</span></div>`; })()}
+      ${(md.ev && !md.batteryKwh && r.evKwh == null) ? `<div class="row"><span class="k">⚡ Заряджено</span><span class="val" style="color:var(--dim);font-size:12px">авто не віддає % батареї — оцінка по пробігу в плитках ↑</span></div>` : ''}
     </div>
 
     <div class="section">
