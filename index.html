@@ -101,6 +101,19 @@
   .tile .tv small { font-size:11.5px; font-weight:600; color:var(--dim); }
   .tile .tk { font-size:10.5px; color:var(--dim); margin-top:3px; }
   .big { font-size:26px; font-weight:800; }
+  /* стрічка дня — вертикальна шкала часу (v64): час · кружечок-іконка · підпис з адресою */
+  .tl { padding-top:2px; }
+  .tli { display:flex; align-items:flex-start; position:relative; padding-bottom:18px; }
+  .tli:last-child { padding-bottom:2px; }
+  .tli::before { content:''; position:absolute; left:61px; top:30px; bottom:-2px; width:2px; background:var(--line); }
+  .tli:last-child::before { display:none; }
+  .tlt { flex:0 0 46px; font-size:12.5px; color:var(--dim); padding-top:7px; font-variant-numeric:tabular-nums; }
+  .tlb { flex:0 0 32px; display:flex; justify-content:center; }
+  .tlb .ic { width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+             font-size:14px; font-weight:800; color:#fff; box-shadow:0 0 0 3px var(--card); }
+  .tlx { flex:1; min-width:0; padding:3px 0 0 12px; }
+  .tlx .t1 { font-weight:700; font-size:14.5px; }
+  .tlx .t2 { font-size:12.5px; color:var(--dim); margin-top:2px; overflow-wrap:anywhere; }
   .ev { display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--line); }
   .ev:last-child { border-bottom:none; }
   .ev .amt { font-weight:700; font-size:16px; }

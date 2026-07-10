@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v63';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v64';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1289,19 +1289,20 @@ async function loadPeriod(el) {
   if (!items.length) {
     tl.innerHTML = '<div class="muted">подій за період нема</div>';
   } else {
-    tl.innerHTML = items.map((it,k)=>{
+    // вертикальна шкала часу (стиль, який вибрав Іван зі скріншота): час зліва, кружечок-іконка, справа підпис
+    const badge = { drive:['#2ecc71','↗'], stop:['#2e6bd8','P'], fill:['#f39c12','⛽'], drain:['#e74c3c','💧'], charge:['#27ae60','⚡'] };
+    tl.innerHTML = '<div class="tl">' + items.map((it,k)=>{
       const t = fmtTime(it.ts);
+      const b = badge[it.type] || ['#7d8b99','•'];
       const tap = it.pt ? ` onclick="focusEvt(${it.pt[0]},${it.pt[1]},'${t}')" style="cursor:pointer"` : '';
-      if (it.type === 'stop')
-        return `<div class="ev"${tap}><span>🅿️ <b>№${it.n}</b> стояв ${fmtDur(it.dur)}<div class="when" id="tla_${k}">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
-      if (it.type === 'drive')
-        return `<div class="ev"><span>🟢 їхав ${fmtDur(it.dur)}${it.km!=null?` · ${it.km} км`:''}${it.maxSpd?` · до ${it.maxSpd} км/г`:''}</span><span class="when">${t}</span></div>`;
-      if (it.type === 'fill')
-        return `<div class="ev"${tap}><span class="amt up">⛽ заправка +${it.l} л<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
-      if (it.type === 'charge')
-        return `<div class="ev"${tap}><span class="amt up">⚡ зарядка +${it.pct}%${it.kwh!=null?` (≈${it.kwh} кВт·год${it.uah!=null?` · ${it.uah} грн`:''})`:''}<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
-      return `<div class="ev"${tap}><span class="amt down">🔴 −${it.l} л злив?<div class="when" id="tla_${k}" style="font-weight:400">${it.pt?'…':''}</div></span><span class="when">${t}</span></div>`;
-    }).join('');
+      let t1 = '', t2 = it.pt ? '…' : '';
+      if (it.type === 'stop')   t1 = `№${it.n} стояв ${fmtDur(it.dur)}`;
+      if (it.type === 'drive') { t1 = `Їхав ${fmtDur(it.dur)}`; t2 = [it.km!=null?`${it.km} км`:null, it.maxSpd?`до ${it.maxSpd} км/г`:null].filter(Boolean).join(' · '); }
+      if (it.type === 'fill')   t1 = `<span style="color:var(--green)">Заправка +${it.l} л</span>`;
+      if (it.type === 'drain')  t1 = `<span style="color:var(--red)">Злив? −${it.l} л</span>`;
+      if (it.type === 'charge') t1 = `<span style="color:var(--green)">Зарядка +${it.pct}%${it.kwh!=null?` · ≈${it.kwh} кВт·год${it.uah!=null?` · ${it.uah} грн`:''}`:''}</span>`;
+      return `<div class="tli"${tap}><div class="tlt">${t}</div><div class="tlb"><div class="ic" style="background:${b[0]}">${b[1]}</div></div><div class="tlx"><div class="t1">${t1}</div><div class="t2" id="tla_${k}">${t2}</div></div></div>`;
+    }).join('') + '</div>';
     // адреси подій — асинхронно (кеш + серійна черга, Nominatim не перевантажуємо)
     items.forEach((it,k)=>{
       if (!it.pt) return;
