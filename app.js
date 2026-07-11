@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v67';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v68';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1210,12 +1210,19 @@ function toggleMapFull(){
   if (btn) { btn.textContent = fs ? '✕' : '⛶'; btn.title = fs ? 'Згорнути карту' : 'Карта на весь екран'; }
   setTimeout(()=>{ if (dMap) dMap.invalidateSize(); }, 60);
 }
+// прокрутити до карти: після v67 вона не липка, і без цього тап по стрічці «спрацьовує невидимо»
+function scrollToMap(){
+  const b = document.querySelector('#detail .body');
+  if (b) b.scrollTo({ top: 0, behavior: 'smooth' });
+}
 // тап по події стрічки → показати місце на карті
 function focusEvt(lat, lon, label){
   if (!dMap || lat == null) return;
   if (_segHl) { dMap.removeLayer(_segHl); _segHl = null; }
   dMap.setView([lat, lon], 16);
   L.popup({ closeButton:true }).setLatLng([lat, lon]).setContent(label).openOn(dMap);
+  scrollToMap();
+  setTimeout(()=>{ if (dMap) dMap.invalidateSize(); }, 350);
 }
 // тап по відрізку «Їхав» → підсвітити САМЕ ЦЕЙ шматок маршруту (фішка з MegaGPS, яку вибрав Іван)
 let _dRep = null, _segHl = null;
@@ -1228,7 +1235,8 @@ function focusSeg(si){
   if (_segHl) { dMap.removeLayer(_segHl); _segHl = null; }
   _segHl = L.polyline(pts.map(p=>[p[0],p[1]]), { color:'#f39c12', weight:6, opacity:.95 }).addTo(dMap);
   _segHl.bindPopup(`${s.km != null ? s.km + ' км · ' : ''}${fmtDur(s.dur)}${s.maxSpd ? ' · до ' + s.maxSpd + ' км/г' : ''}`);
-  dMap.fitBounds(_segHl.getBounds(), { padding:[30,30] });
+  scrollToMap();
+  setTimeout(()=>{ if (dMap) { dMap.invalidateSize(); dMap.fitBounds(_segHl.getBounds(), { padding:[30,30] }); } }, 350);
 }
 
 let _loadSeq = 0;   // токен покоління: швидке перемикання вкладок не дає «повільному місяцю» перетерти свіжу вкладку
