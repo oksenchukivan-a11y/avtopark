@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v66';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v67';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1151,7 +1151,7 @@ function openDetail(d) {
   // карта — ЗВЕРХУ і «липка» (як у Wialon/MegaGPS): відкрив авто → одразу бачиш, де воно і маршрут;
   // стрічка й цифри прокручуються ПІД картою, карта лишається на екрані
   document.getElementById('dBody').innerHTML = `
-    <div class="mapwrap"><div id="dMap" class="dmap"></div></div>
+    <div class="mapwrap"><div id="dMap" class="dmap"></div><button class="mapfull" id="mapFullBtn" onclick="toggleMapFull()" title="Карта на весь екран">⛶</button></div>
     <div class="tabs">${dayTabsHtml()}</div>
     <div id="periodOut"><div class="spinner">…</div></div>
     <div class="section">
@@ -1201,7 +1201,16 @@ function periodRange(p){
   const d = new Date(); d.setDate(1); d.setHours(0,0,0,0);
   return [Math.floor(d/1000), now];
 }
-// тап по події стрічки → показати місце на карті (карта липка зверху — скролити не треба)
+// ⛶ карта на весь екран і назад (як у Wialon): перемикаємо клас, Leaflet перераховує розмір
+function toggleMapFull(){
+  const w = document.querySelector('#detail .mapwrap');
+  if (!w) return;
+  const fs = w.classList.toggle('mapfs');
+  const btn = document.getElementById('mapFullBtn');
+  if (btn) { btn.textContent = fs ? '✕' : '⛶'; btn.title = fs ? 'Згорнути карту' : 'Карта на весь екран'; }
+  setTimeout(()=>{ if (dMap) dMap.invalidateSize(); }, 60);
+}
+// тап по події стрічки → показати місце на карті
 function focusEvt(lat, lon, label){
   if (!dMap || lat == null) return;
   if (_segHl) { dMap.removeLayer(_segHl); _segHl = null; }
