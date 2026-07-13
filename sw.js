@@ -1,20 +1,30 @@
 // Service worker — застосунок ставиться як додаток і працює офлайн.
 // Стратегія: код (html/js) — мережа-перша (оновлення видно одразу), статика — кеш-перша.
 // API flespi НЕ кешуємо — дані завжди свіжі.
-const CACHE = 'avtopark-v69';
-const SHELL = [
+const CACHE = 'avtopark-v70';
+const SHELL_LOCAL = [
   './',
   './index.html',
   './app.js',
   './manifest.json',
   './icons/icon-192.png',
-  './icons/icon-512.png',
+  './icons/icon-512.png'
+];
+const SHELL_CDN = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // addAll атомарний: недоступний unpkg раніше валив УСТАНОВКУ ЦІЛКОМ (новий SW не активувався,
+  // старий код жив у кеші далі). Локальна оболонка — обовʼязкова, CDN — як вийде.
+  e.waitUntil(
+    caches.open(CACHE).then(c =>
+      c.addAll(SHELL_LOCAL).then(() =>
+        Promise.allSettled(SHELL_CDN.map(u => c.add(u)))
+      )
+    ).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {
@@ -42,13 +52,23 @@ self.addEventListener('fetch', e => {
   if (url.startsWith(self.location.origin) && (url.endsWith('.html') || url.endsWith('.js') || url.endsWith('/') || url.endsWith('.json'))) {
     e.respondWith(
       fetch(e.request).then(r => {
-        const copy = r.clone();
-        caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{});
+        // кешуємо ЛИШЕ вдалу відповідь: 404/500 у вікні деплою GitHub Pages інакше перетирали
+        // робочий app.js у кеші → офлайн-відкриття давало білий екран
+        if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{}); }
         return r;
-      }).catch(() => caches.match(e.request))
+      }).catch(() =>
+        // ignoreSearch: start_url PWA може мати query (./?...) — без цього офлайн-промах на рівному місці
+        caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('./index.html'))
+      )
     );
     return;
   }
-  // решта (leaflet cdn, іконки) — кеш-перша
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+  // решта (leaflet cdn, іконки) — кеш-перша, і докладаємо в кеш при першому вдалому фетчі
+  // (якщо install не зміг покласти CDN-файли, вони закешуються тут при першому онлайн-використанні)
+  e.respondWith(
+    caches.match(e.request).then(r => r || fetch(e.request).then(resp => {
+      if (resp && resp.ok) { const copy = resp.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{}); }
+      return resp;
+    }))
+  );
 });

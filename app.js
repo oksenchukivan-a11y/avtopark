@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v69';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v70';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -36,19 +36,33 @@ function logout() {
 
 // ===== API (з ретраями — flespi інколи віддає порожнє) =====
 // 401/403 НЕ означає одразу мертвий токен: flespi зрідка відповідає так і на живий ключ
-// (перехідні блокування/ліміти). Розлогінюємось лише після 3 таких відповідей ПОСПІЛЬ,
-// без жодного успішного запиту між ними (v66: раніше викидало з першої — Іван ловив
-// «Токен недійсний» на робочому токені).
-let _authFails = 0;
+// (перехідні блокування/ліміти). Паралельні фонові пулери можутьназбирати кілька 403 за секунди,
+// тому: рахуємо лише ЩІЛЬНУ серію (вікно 60 с), поріг 6, розлогін БЕЗ confirm (інакше «Скасувати»
+// лишало лічильник на порозі → нескінченний шторм alert-ів), і лише один alert (_loggingOut).
+let _authFails = 0, _authFirstAt = 0, _loggingOut = false;
 async function api(path, method, body) {
   let last;
   for (let i = 0; i < 3; i++) {
     try {
       const opt = { method: method || 'GET', headers: { Authorization: 'FlespiToken ' + token() } };
       if (body != null) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
-      const r = await fetch(FLESPI + path, opt);
+      // таймаут 15 с: підвислий fetch (зміна мережі на iOS) інакше тримає _refreshing=true вічно —
+      // застосунок застигав на «оновлюю…» без наступного тика
+      const ac = new AbortController();
+      const tmr = setTimeout(() => ac.abort(), 15000);
+      opt.signal = ac.signal;
+      let r;
+      try { r = await fetch(FLESPI + path, opt); } finally { clearTimeout(tmr); }
       if (r.status === 401 || r.status === 403) {
-        if (++_authFails >= 3) { alert('Токен недійсний — введи ключ заново'); logout(); throw new Error('AUTH'); }
+        const nowA = Date.now();
+        if (nowA - _authFirstAt > 60000) { _authFirstAt = nowA; _authFails = 0; }
+        if (++_authFails >= 6 && !_loggingOut) {
+          _loggingOut = true;
+          alert('Токен недійсний — введи ключ заново');
+          try { localStorage.removeItem('flespi_token'); } catch(e){}
+          location.reload();
+          throw new Error('AUTH');
+        }
         last = 'auth'; await new Promise(res=>setTimeout(res, 1200*(i+1))); continue;
       }
       const txt = await r.text();
@@ -64,7 +78,7 @@ async function api(path, method, body) {
       return j.result;
     } catch (e) {
       if (e.message === 'AUTH') throw e;
-      last = e.message;
+      last = (e.name === 'AbortError') ? 'timeout' : e.message;
     }
   }
   throw new Error(last || 'api');
@@ -85,6 +99,9 @@ function tts(tel, key) {
 
 // ===== Час =====
 function startOfDay(d = new Date()) { const x = new Date(d); x.setHours(0,0,0,0); return Math.floor(x/1000); }
+// початок дня «i днів тому» ЧЕРЕЗ setDate, а не -i*86400: у ніч переводу годинника доба = 23/25 год,
+// і арифметика секундами зсувала всі вкладки минулих днів на годину
+function dayStartTs(i){ const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() - i); return Math.floor(d.getTime()/1000); }
 function fmtTime(sec){ return new Date(sec*1000).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'}); }
 function fmtDateTime(sec){ return new Date(sec*1000).toLocaleString('uk-UA',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
 function fmtDur(sec){
@@ -194,7 +211,10 @@ async function lastValidFuel(dev){
   const md = dev.metadata || {};
   const tank = md.tank || (TANKS[dev.id] && TANKS[dev.id].tank) || null;
   const now = Math.floor(Date.now()/1000);
-  for (const field of ['can.fuel.volume','can.fuel.level']) {
+  // fuelByPct = OEM-літри цього авто ненадійні → в історії теж питаємо СПОЧАТКУ відсотки
+  // (інакше кеш отруювався некаліброваним volume — та сама регресія, що з плагіном Audi)
+  const fieldsOrder = md.fuelByPct ? ['can.fuel.level','can.fuel.volume'] : ['can.fuel.volume','can.fuel.level'];
+  for (const field of fieldsOrder) {
     const data = encodeURIComponent(JSON.stringify({ from: now-30*86400, to: now, count:50, reverse:true, filter:field, fields:'timestamp,'+field }));
     try {
       const res = await api(`/gw/devices/${dev.id}/messages?data=${data}`);
@@ -215,7 +235,10 @@ async function lastValidFuel(dev){
 // реальні DTC-коди (P0301 тощо) або "No fault codes detected". Потрібен трекер онлайн і ввімкнене запалювання.
 const _faultsInflight = {};
 async function checkFaults(devId) {
-  const el = document.getElementById('faults_' + devId);
+  // елемент шукаємо ЩОРАЗУ заново: openDetail перетирає dBody, і захоплений один раз вузол ставав
+  // «відірваним» — результат писався в нікуди, а кнопка в новій панелі мовчала до кінця циклу
+  const getEl = () => document.getElementById('faults_' + devId);
+  let el = getEl();
   if (!el) return;
   if (_faultsInflight[devId]) return;   // вже питаємо — другий тап не шле другу команду
   _faultsInflight[devId] = true;
@@ -225,26 +248,36 @@ async function checkFaults(devId) {
     const posted = await api(`/gw/devices/${devId}/commands-queue`, 'POST', [{ name:'custom', properties:{ text:'faultcodes' } }]);
     const cmdId = posted && posted[0] && posted[0].id;
     if (!cmdId) throw new Error('не вдалось надіслати');
+    let fails = 0;
     for (let i = 0; i < 12; i++) {
       await new Promise(r => setTimeout(r, 5000));
+      el = getEl();
+      if (!el) return;                                   // панель закрили/перебудували — далі мовчки не полимо
       let res;
-      try { res = await api(`/gw/devices/${devId}/commands-result/${cmdId}`); } catch(e) { continue; }
+      // під вибитим лімітом кожен невдалий пол = ще 3 HTTP-ретраї всередині api(); 2 фейли поспіль — стоп
+      try { res = await api(`/gw/devices/${devId}/commands-result/${cmdId}`); fails = 0; }
+      catch(e) { if (++fails >= 2) { el.textContent = '⚠️ flespi не відповідає — спробуй за хвилину.'; return; } continue; }
       const c = res && res[0];
       if (c && c.executed) {
         const txt = c.response || '';
-        if (txt) localStorage.setItem('faults:' + devId, JSON.stringify({ ts: Date.now(), txt: String(txt).slice(0, 500) }));   // ручна перевірка теж оновлює кеш авто-перевірки
+        if (txt) {
+          const c0 = faultsCache(devId) || {};
+          delete c0.pendingCmd; delete c0.postedAt;      // жива відповідь закриває і авто-команду
+          try { localStorage.setItem('faults:' + devId, JSON.stringify({ ...c0, ts: Date.now(), txt: String(txt).slice(0, 500) })); } catch(e){}
+        }
         if (/no fault codes/i.test(txt)) {
           el.innerHTML = '<span style="color:#2ecc71">✅ Помилок не виявлено (блок авто відповів напряму)</span>';
         } else {
           // показуємо сирі коди — їх можна прогуглити (P/C/B/U-код) або показати мені
-          el.innerHTML = '<span style="color:#e74c3c">🛑 Авто повідомило: ' + txt.replace(/</g,'&lt;') + '</span>';
+          el.innerHTML = '<span style="color:#e74c3c">🛑 Авто повідомило: ' + esc(txt) + '</span>';
         }
         return;
       }
     }
     el.textContent = '⌛ Авто не відповіло за 60 сек — найчастіше заглушене запалювання. Спробуй, коли машина заведена.';
   } catch(e) {
-    el.textContent = '⚠️ Не вийшло: ' + e.message + ' — спробуй ще раз.';
+    el = getEl();
+    if (el) el.textContent = '⚠️ Не вийшло: ' + e.message + ' — спробуй ще раз.';
   } finally {
     delete _faultsInflight[devId];
   }
@@ -257,24 +290,31 @@ async function checkFaults(devId) {
 const FAULTS_STALE_MS = 12 * 3600 * 1000;
 function faultsCache(devId){ try { return JSON.parse(localStorage.getItem('faults:' + devId)) || null; } catch(e){ return null; } }
 function faultsBad(txt){ return /[PBCU][0-9]{3,4}/i.test(txt || ''); }   // у відповіді є реальний DTC-код
-let _autoFaultsAt = 0;
+const _appOpenedAt = Date.now();
 const _autoPolling = {};
 async function autoFaultsSweep(devs){
-  if (Date.now() - _autoFaultsAt < 3600 * 1000) return;   // легкий на запити: цикл не частіше 1 разу/год
-  _autoFaultsAt = Date.now();
+  // гейт «раз на годину» — у localStorage: кожне відкриття PWA = новий JS-контекст, і лічильник у
+  // памʼяті означав би sweep на КОЖНОМУ відкритті (внесок у сплеск запитів → «забагато запитів»)
+  const lastAt = +localStorage.getItem('autoFaultsAt') || 0;
+  if (Date.now() - lastAt < 3600 * 1000) return;
+  if (Date.now() - _appOpenedAt < 90 * 1000) return;      // перші 90 с після відкриття кеші й так холодні — не додаємо навантаження
+  try { localStorage.setItem('autoFaultsAt', String(Date.now())); } catch(e){}
+  let slot = 0;
   for (const d of devs) {
     const c = faultsCache(d.id);
     if (c && c.ts && Date.now() - c.ts < FAULTS_STALE_MS) continue;                       // свіже — пропускаємо
     if (c && c.pendingCmd && Date.now() - (c.postedAt || 0) < 6 * 3600 * 1000) {          // команда ще в черзі — дочекаємось її
-      pollAutoFaults(d.id, c.pendingCmd); continue;
+      const cmd = c.pendingCmd;
+      setTimeout(() => pollAutoFaults(d.id, cmd), slot++ * 5000);                          // розносимо старти, щоб пулери не били залпом
+      continue;
     }
     try {
       const posted = await api(`/gw/devices/${d.id}/commands-queue`, 'POST',
         [{ name:'custom', properties:{ text:'faultcodes' }, max_attempts: 20, ttl: 21600 }]);
       const cmdId = posted && posted[0] && posted[0].id;
       if (cmdId) {
-        localStorage.setItem('faults:' + d.id, JSON.stringify({ ts: (c && c.ts) || 0, txt: (c && c.txt) || '', pendingCmd: cmdId, postedAt: Date.now() }));
-        pollAutoFaults(d.id, cmdId);
+        try { localStorage.setItem('faults:' + d.id, JSON.stringify({ ts: (c && c.ts) || 0, txt: (c && c.txt) || '', pendingCmd: cmdId, postedAt: Date.now() })); } catch(e){}
+        setTimeout(() => pollAutoFaults(d.id, cmdId), slot++ * 5000);
       }
     } catch(e){ /* тихо: наступний цикл повторить */ }
   }
@@ -370,7 +410,9 @@ function maybeAutoReboot(d, tel){
   autoRebootAt[d.id] = Date.now();   // ставимо одразу (проти гонки паралельних refresh)...
   api(`/gw/devices/${d.id}/commands-queue`, 'POST', [{ name:'custom', properties:{ text:'cpureset' } }])
     .then(()=>{ try { localStorage.setItem('autoRebootAt', JSON.stringify(autoRebootAt)); } catch(e){} })
-    .catch(()=>{ delete autoRebootAt[d.id]; });   // ...але фейл POST знімає кулдаун — спробуємо наступного циклу
+    // ...фейл POST (типово — вибитий ліміт, і у регіональне глушіння це 5 авто РАЗОМ) → повтор не раніше
+    // ніж за 10 хв, а не на кожному рендері: раніше знімали кулдаун повністю — ще +15 HTTP на рендер
+    .catch(()=>{ autoRebootAt[d.id] = Date.now() - AUTO_REBOOT_COOLDOWN_MS + 10*60000; });
 }
 // запас з адаптацією під ЗАРЯД для електричок (датчик авто застрягає на постійному значенні — як Kangoo Z.E. = 185 при будь-якому %)
 function vehicleRange(dev, tel){
@@ -418,7 +460,8 @@ function vehIcon(dev, online, active, gpsLost) {
   const border = gpsLost ? '3px dashed #f39c12' : (active ? '3px solid #2ecc71' : '2px solid #fff');
   const glow = gpsLost ? ',0 0 8px 2px rgba(243,156,18,.85)' : (active ? ',0 0 8px 2px rgba(46,204,113,.85)' : '');
   const badge = gpsLost ? '<div style="position:absolute;top:-4px;right:-4px;font-size:12px">⚠️</div>' : '';
-  const html = '<div style="position:relative;opacity:'+dim+'"><div style="background:'+color+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+icon+'</div>'+badge+'</div>';
+  // color/icon — з метаданих flespi → esc обовʼязково (та сама модель загрози, що для імен: XSS = крадіжка токена)
+  const html = '<div style="position:relative;opacity:'+dim+'"><div style="background:'+esc(color)+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+esc(icon)+'</div>'+badge+'</div>';
   return L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
 }
 function markerFor(dev, latlon, online, active, gpsLost) {
@@ -527,6 +570,7 @@ function displayActive(dev, tel, online) {
 
 function renderCards(devs) {
   const list = document.getElementById('list');
+  const _st = list.scrollTop;   // перебудова обнуляє прокрутку — повертаємо, щоб список не «стрибав» під пальцем
   list.innerHTML = '';
   let nActive = 0, nStopped = 0;
   for (const d of devs) {
@@ -662,6 +706,7 @@ function renderCards(devs) {
   sum.style.cssText = 'display:flex;gap:18px;justify-content:center;align-items:center;padding:9px 10px;margin-bottom:10px;font-size:13px;font-weight:600;background:rgba(255,255,255,.04);border-radius:10px';
   sum.innerHTML = `<span style="color:#2ecc71">🟢 ${nActive} в роботі</span><span style="color:#a0a8b4">🅿️ ${nStopped} стоять</span>`;
   list.insertBefore(sum, list.firstChild);
+  list.scrollTop = _st;   // повертаємо прокрутку — список не стрибає вгору при кожному оновленні
 }
 
 // шари карти — Google (дорожня/супутник/гібрид), з укр. підписами
@@ -721,6 +766,10 @@ function renderMap(devs) {
       markers[d.id] = markerFor(d, [lat,lon], online, active, gpsLost).addTo(map).bindPopup(html);
     }
   }
+  // маркери-привиди: пристрій зник з flespi (видалили/перенесли) — прибираємо з карти, інакше висить зі старою позицією
+  for (const mid of Object.keys(markers)) {
+    if (!devs.some(d => String(d.id) === mid)) { try { map.removeLayer(markers[mid]); } catch(e){} delete markers[mid]; }
+  }
   if (pts.length && !map._fitted) { map.fitBounds(pts, { padding:[40,40], maxZoom:13 }); map._fitted = true; }
 }
 
@@ -731,7 +780,13 @@ function renderMap(devs) {
 let mileageFieldCache = {};
 try { mileageFieldCache = JSON.parse(localStorage.getItem('mileageFieldCache') || '{}'); } catch(e) { mileageFieldCache = {}; }
 async function mileageField(id, from, to) {
-  if (mileageFieldCache[id]) return mileageFieldCache[id];
+  // запис живе 7 днів: якщо трекер переставили на авто БЕЗ CAN-одометра, вічний кеш давав вічне «—»
+  const mc = mileageFieldCache[id];
+  if (mc) {
+    const f = (typeof mc === 'string') ? mc : mc.f;
+    const at = (typeof mc === 'string') ? 0 : (mc.at || 0);
+    if (Date.now() - at < 7*86400000) return f;
+  }
   for (const field of ['can.vehicle.mileage', 'vehicle.mileage']) {
     const data = encodeURIComponent(JSON.stringify({ from, to, count:1, reverse:true, filter:field }));
     const res = await api(`/gw/devices/${id}/messages?data=${data}`);
@@ -740,7 +795,7 @@ async function mileageField(id, from, to) {
       // (авто спало), раніше назавжди фіксувався GNSS-фолбек — а він отруєний телепортом «у Ліму»
       // (+12600 км) і дає нулі/сміття. Тепер фолбек діє лише для цього виклику, CAN пробуємо знову.
       if (field === 'can.vehicle.mileage') {
-        mileageFieldCache[id] = field;
+        mileageFieldCache[id] = { f: field, at: Date.now() };
         try { localStorage.setItem('mileageFieldCache', JSON.stringify(mileageFieldCache)); } catch(e){}
       }
       return field;
@@ -780,21 +835,29 @@ async function dayMileage(id, from, to) {
   const key = id + ':' + from + ':' + (live ? 'live' : to);
   const c = dayMileageCache[key];
   // закритий період кешуємо 2 год (НЕ добу: трекер після відновлення звʼязку докидає буферизовані записи
-  // заднім числом, і «вчора», пораховане о 00:05, було б занижене цілу добу)
-  if (c && (Date.now() - c.at) < (live ? DAY_MILEAGE_TTL : 2*3600000)) return c.km;
+  // заднім числом, і «вчора», пораховане о 00:05, було б занижене цілу добу).
+  // Фейл кешуємо на 90 с (негативний кеш): інакше під вибитим лімітом кожен рендер повторював
+  // увесь ланцюг запитів ×3 ретраї — лавина саме тоді, коли flespi і так відбивається.
+  if (c && (Date.now() - c.at) < (c.fail ? 90000 : (live ? DAY_MILEAGE_TTL : 2*3600000))) return c.km;
   if (dayMileageInflight[key]) return dayMileageInflight[key];   // вже летить — чекаємо той самий, не дублюємо запит
   dayMileageInflight[key] = (async () => {
-    const t = to || Math.floor(Date.now()/1000);
     let km = null;
-    const field = await mileageField(id, from, t);
-    if (field) {
-      const [first, last] = await Promise.all([ odoAt(id, from, t, false, field), odoAt(id, from, t, true, field) ]);
-      if (first != null && last != null) {
-        const d = Math.round(last - first);
-        // межа глюків МАСШТАБУЄТЬСЯ періодом: фіксовані 3000 км обрізали чесний МІСЯЧНИЙ пробіг (>3000 за місяць — норма)
-        const maxPlausible = Math.max(1, Math.ceil((t - from) / 86400)) * 1500;   // ≤1500 км/добу
-        if (d >= 0 && d <= maxPlausible) km = d;   // негатив/абсурд (телепорт одометра) — краще нічого, ніж дурне число
+    try {
+      const t = to || Math.floor(Date.now()/1000);
+      const field = await mileageField(id, from, t);
+      if (field) {
+        const [first, last] = await Promise.all([ odoAt(id, from, t, false, field), odoAt(id, from, t, true, field) ]);
+        if (first != null && last != null) {
+          const d = Math.round(last - first);
+          // межа глюків МАСШТАБУЄТЬСЯ періодом: фіксовані 3000 км обрізали чесний МІСЯЧНИЙ пробіг (>3000 за місяць — норма)
+          const maxPlausible = Math.max(1, Math.ceil((t - from) / 86400)) * 1500;   // ≤1500 км/добу
+          if (d >= 0 && d <= maxPlausible) km = d;   // негатив/абсурд (телепорт одометра) — краще нічого, ніж дурне число
+        }
       }
+    } catch(e) {
+      dayMileageCache[key] = { km: null, at: Date.now(), fail: true };   // короткий негативний кеш — див. вище
+      try { localStorage.setItem('dayMileageCache2', JSON.stringify(dayMileageCache)); } catch(e2){}
+      return null;
     }
     dayMileageCache[key] = { km, at: Date.now() };
     try { localStorage.setItem('dayMileageCache2', JSON.stringify(dayMileageCache)); } catch(e){}
@@ -836,20 +899,23 @@ async function lastActiveInfo(id, isEV){
   return null;
 }
 // повертає готовий текст: «2 год 15 хв» або «≥ 1 год» (коли немає давнішої історії)
+const _standingInflight = {};
 async function standingText(dev){
   const id = dev.id, isEV = !!(dev.metadata && (dev.metadata.ev || dev.metadata.evRangeFull));
   const now = Math.floor(Date.now()/1000);
   let ts, atLeast;
   const c = standingCache[id];
-  if (c && (Date.now()-c.at) < 1800000) { ts = c.ts; atLeast = c.atLeast; }   // кеш 30 хв (момент простою фіксований)
+  // фейл кешуємо на 90 с (не 30 хв — щоб «—» не залипало, і не 0 с — щоб не бомбити flespi ретраями)
+  if (c && (Date.now()-c.at) < (c.fail ? 90000 : 1800000)) { ts = c.ts; atLeast = c.atLeast; }
   else {
-    const info = await lastActiveInfo(id, isEV);
+    if (!_standingInflight[id]) {   // подвійний рендер при відкритті (знімок + живі дані) — один запит на обох
+      _standingInflight[id] = lastActiveInfo(id, isEV).finally(() => { delete _standingInflight[id]; });
+    }
+    const info = await _standingInflight[id];
     ts = info ? info.ts : null;
     atLeast = info ? !info.found : false;
-    if (info) {   // невдачу НЕ кешуємо — інакше «—» залипає на 30 хв після одного мережевого фейлу
-      standingCache[id] = { ts, at: Date.now(), atLeast };
-      try { localStorage.setItem('standingCache', JSON.stringify(standingCache)); } catch(e){}
-    }
+    standingCache[id] = info ? { ts, at: Date.now(), atLeast } : { ts: null, at: Date.now(), fail: true };
+    try { localStorage.setItem('standingCache', JSON.stringify(standingCache)); } catch(e){}
   }
   if (ts == null) return '—';
   return (atLeast ? '≥ ' : '') + fmtStanding(now - ts);
@@ -885,7 +951,9 @@ function geocode(lat, lon){
 }
 
 // ===== ЗВЕДЕННЯ ЗА ПЕРІОД (все одним проходом по повідомленнях) =====
-async function periodReport(id, from, to) {
+// isStale (опційно) — колбек «результат уже нікому не потрібен»: рве пагінацію, коли користувач
+// перемкнув вкладку/закрив панель, інакше покинутий «Місяць» тягнув до 10×40к запитів у фоні
+async function periodReport(id, from, to, isStale) {
   // 1) одометр — точно і дешево
   const odoKmP = dayMileage(id, from, to);
 
@@ -895,20 +963,24 @@ async function periodReport(id, from, to) {
   const FIELDS = 'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level,can.vehicle.battery.level';
   let msgs = [], pageFrom = from, truncated = false;
   for (let page = 0; page < 10; page++) {                       // до 400к повідомлень; далі чесно позначаємо обрізання
+    if (isStale && isStale()) { truncated = true; break; }
     const data = encodeURIComponent(JSON.stringify({ from: pageFrom, to, count:40000, fields: FIELDS }));
     let batch = [];
-    try { batch = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e) { break; }
+    // мережевий фейл посеред пагінації = зібрано ЛИШЕ шматок → обовʼязково truncated, інакше
+    // odoKm за весь період проти огризка gpsKm давав фальшивий «⚠ РЕБ» і занижені цифри без попередження
+    try { batch = await api(`/gw/devices/${id}/messages?data=${data}`) || []; } catch(e) { truncated = true; break; }
     msgs = msgs.concat(batch);
     if (batch.length < 40000) break;                            // остання (неповна) пачка — все зібрано
     pageFrom = (batch[batch.length-1].timestamp || pageFrom) + 0.001;
     if (page === 9) truncated = true;
   }
   msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
+  const mdR = ((devCache || []).find(x => x.id === id) || {}).metadata || {};   // калібрування палива — як у fuelCurrent
 
   const tank = tankFor(id);
   const track = [];
   let gpsM = 0, prevPt = null, prevTs = null, lastTrackPt = null;
-  let firstFuel = null, lastFuel = null, prevFuel = null;
+  let firstFuel = null, lastFuel = null, prevFuel = null, prevFuelTs = null;
   let prevSoc = null, prevSocTs = null; const charges = [];   // ⚡ сесії зарядки електрички: зростання SoC на стоянці
   const fills = [], drains = [];
   const stops = [];
@@ -969,7 +1041,7 @@ async function periodReport(id, from, to) {
         const kmh = (dt > 0) ? (dm / dt * 3.6) : 0;
         // dt<=0 (буферизовані пачки з однаковим часом) обходив фільтр: стрибок з kmh=0 проходив як «рух»
         teleport = (dt <= 0) ? (dm > JITTER_M) : (dm > JITTER_M && kmh >= 200);
-        if (dm > JITTER_M && !teleport) gpsM += dm;      // реальний рух; телепорти й дрижання — мимо
+        if (dm > JITTER_M && !teleport && goodPrecision) gpsM += dm;   // рух; телепорти, дрижання і неточні фікси (hdop>4) — мимо
       }
       prevPt = pt; prevTs = ts;
       // МАЛЮЄМО трек рідше за сирі фікси: при пілінгу 2с GPS-шум (±3-8м) дає зубчасту «розмазану» лінію.
@@ -989,9 +1061,18 @@ async function periodReport(id, from, to) {
       }
     }
 
-    // паливо в літрах: з can.fuel.volume напряму (Master), або can.fuel.level% × бак (Audi)
-    let flv = m['can.fuel.volume'];
-    if ((flv == null || flv <= 0) && m['can.fuel.level'] != null && tank) flv = m['can.fuel.level']/100*tank;
+    // паливо в літрах — ТИМ САМИМ калібруванням, що й картка (fuelCurrent): інакше звіт і картка
+    // розходились (некалібрований volume у звіті проти fuelByPct/fuelFactor на картці), а перемикання
+    // джерела volume↔pct на стоянках давало фантомні «зливи» ±4 л
+    const fpct = m['can.fuel.level'];
+    let flv = null;
+    if (mdR.fuelByPct) {
+      if (fpct != null && fpct > 0 && tank) flv = fpct/100*tank;
+    } else {
+      flv = m['can.fuel.volume'];
+      if (flv != null && flv > 0 && mdR.fuelFactor) flv = flv * mdR.fuelFactor;
+      if ((flv == null || flv <= 0) && fpct != null && tank) flv = fpct/100*tank;
+    }
     // глюк-фільтр: паливо не може бути більшим за бак (запас ходу теж «бреше» — той самий клас сенсорного сміття)
     if (flv != null && tank && flv > tank * 1.15) flv = null;
     if (flv != null && flv > 0) {
@@ -999,10 +1080,13 @@ async function periodReport(id, from, to) {
       lastFuel = flv;
       if (prevFuel != null) {
         const d = flv - prevFuel;
+        // злив: або явно на стоянці (sp<3), або після «сну» трекера >10 хв — датчик шле лише в русі,
+        // і нічна крадіжка інакше з'їдалась у «витрачено» без тривоги (той самий клас, що km<0.3 у Leaf)
+        const slept = (prevFuelTs != null && ts - prevFuelTs > 600);
         if (d >= FILL_L) fills.push({ ts, l: d, pt: prevPt });                        // pt — де сталась заправка
-        else if (-d >= DRAIN_L && (sp==null || sp<3)) drains.push({ ts, l: -d, pt: prevPt });
+        else if (-d >= DRAIN_L && (sp==null || sp<3 || slept)) drains.push({ ts, l: -d, pt: prevPt });
       }
-      prevFuel = flv;
+      prevFuel = flv; prevFuelTs = ts;
     }
 
     // ⚡ ЗАРЯДКА електрички: SoC росте на стоянці. Сесії ближче 30 хв зливаємо в одну (нічна зарядка = одна подія).
@@ -1011,9 +1095,10 @@ async function periodReport(id, from, to) {
       if (prevSoc != null && soc > prevSoc && (sp == null || sp < 3)) {
         const dpct = soc - prevSoc;
         // допустимий приріст МАСШТАБУЄТЬСЯ часом між замірами: вночі трекер спить, і зарядка +50%
-        // приходить одним стрибком уранці — це не глюк. Повільна зарядка ≈25%/год (+5% запас).
+        // приходить одним стрибком уранці — це не глюк. 40%/год покриває і 7кВт wallbox для Z.E.
+        // (22 кВт·год ÷ 7 кВт ≈ 32%/год) — стара ставка 25%/год мовчки викидала реальні сесії.
         const hrs = prevSocTs != null ? Math.max(0, (ts - prevSocTs) / 3600) : 0;
-        const maxRise = Math.min(100, hrs * 25 + 5);
+        const maxRise = Math.min(100, hrs * 40 + 8);
         if (dpct <= maxRise) {
           const lastC = charges[charges.length-1];
           if (lastC && ts - lastC.endTs < 1800) { lastC.pct += dpct; lastC.endTs = ts; }
@@ -1124,7 +1209,7 @@ function openDetail(d) {
   // головна цифра: для електрички — заряд+SoH, для решти — паливо
   const firstBig = ev.soc != null
     ? `<div><div class="big" style="color:var(--green)">${Math.round(ev.soc)} %</div><div class="l" style="color:var(--dim);font-size:12px">заряд батареї${ev.soh!=null?` · SoH ${Math.round(ev.soh)}%`:''}</div></div>`
-    : `<div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':'—'}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${tank?` (бак ${tank} л)`:''}</div></div>`;
+    : `<div><div class="big" style="color:var(--accent)">${liters!=null?liters+' л':'—'}</div><div class="l" style="color:var(--dim);font-size:12px">в баку${tank?` (бак ${esc(tank)} л)`:''}</div></div>`;
 
   const diagBlock = `
     <div style="margin-top:14px;border-top:1px solid rgba(255,255,255,.08);padding-top:10px">
@@ -1194,7 +1279,7 @@ function dayTabsHtml(){
   const wd = ['нд','пн','вт','ср','чт','пт','сб'];
   let h = '';
   for (let i = 0; i < 7; i++) {
-    const dt = new Date(startOfDay()*1000 - i*86400000);
+    const dt = new Date(dayStartTs(i)*1000);
     const label = i === 0 ? 'Сьогодні' : `${wd[dt.getDay()]} ${dt.getDate()}.${String(dt.getMonth()+1).padStart(2,'0')}`;
     h += `<div class="tab${i===0?' active':''}" data-p="d${i}" onclick="loadPeriod(this)">${label}</div>`;
   }
@@ -1205,8 +1290,8 @@ function dayTabsHtml(){
 function periodRange(p){
   const now = Math.floor(Date.now()/1000);
   const dm = /^d(\d+)$/.exec(p);
-  if (dm) { const i = +dm[1]; const t0 = startOfDay() - i*86400; return [t0, i === 0 ? now : t0 + 86400]; }
-  if (p === 'week') return [now - 7*86400, now];
+  if (dm) { const i = +dm[1]; const t0 = dayStartTs(i); return [t0, i === 0 ? now : dayStartTs(i-1)]; }
+  if (p === 'week') { const now5 = now - (now % 300); return [now5 - 7*86400, now]; }   // from кратний 5 хв: стабільний ключ кешу dayMileage
   const d = new Date(); d.setDate(1); d.setHours(0,0,0,0);
   return [Math.floor(d/1000), now];
 }
@@ -1245,7 +1330,7 @@ function focusSeg(si){
   _segHl = L.polyline(pts.map(p=>[p[0],p[1]]), { color:'#f39c12', weight:6, opacity:.95 }).addTo(dMap);
   _segHl.bindPopup(`${s.km != null ? s.km + ' км · ' : ''}${fmtDur(s.dur)}${s.maxSpd ? ' · до ' + s.maxSpd + ' км/г' : ''}`);
   scrollToMap();
-  setTimeout(()=>{ if (dMap) { dMap.invalidateSize(); dMap.fitBounds(_segHl.getBounds(), { padding:[30,30] }); } }, 350);
+  setTimeout(()=>{ if (dMap && _segHl) { dMap.invalidateSize(); dMap.fitBounds(_segHl.getBounds(), { padding:[30,30] }); } }, 350);   // _segHl міг зникнути (тап по зупинці за ці 350 мс)
 }
 
 let _loadSeq = 0;   // токен покоління: швидке перемикання вкладок не дає «повільному місяцю» перетерти свіжу вкладку
@@ -1260,9 +1345,17 @@ async function loadPeriod(el) {
   if (dMap) { dMap.remove(); dMap = null; } _segHl = null;
 
   let r;
-  try { r = await periodReport(curDetail.id, from, to); }
-  catch(e){ if (seq === _loadSeq) out.innerHTML = '<div class="muted">помилка: '+e.message+'</div>'; return; }
-  if (seq !== _loadSeq) return;   // поки рахували, користувач уже перемкнувся на іншу вкладку
+  try { r = await periodReport(curDetail.id, from, to, () => seq !== _loadSeq); }
+  catch(e){
+    if (seq === _loadSeq && document.getElementById('periodOut')) {
+      document.getElementById('periodOut').innerHTML = '<div class="muted">помилка: ' + esc(e.message) + '</div>';
+      const oldMsg = document.getElementById('dMapMsg'); if (oldMsg) oldMsg.remove();   // не лишати підпис від старої вкладки
+      drawTrack([], []);                                                                 // і не лишати мертвий сірий прямокутник замість карти
+    }
+    return;
+  }
+  // перемкнули вкладку АБО закрили панель (closeDetail занулює curDetail) — результат нікому не потрібен
+  if (seq !== _loadSeq || !curDetail) return;
 
   const f = (v,u)=> v!=null ? v.toLocaleString('uk-UA')+' '+u : '—';
   const jammed = !r.truncated && (r.odoKm != null && r.odoKm > 2 && r.gpsKm < r.odoKm*0.5);   // при обрізаних даних порівняння некоректне
@@ -1277,7 +1370,7 @@ async function loadPeriod(el) {
   // середній розхід л/100км (дизель): витрачені літри ÷ пробіг; одометр надійніший за GPS під РЕБ
   let per100 = null, normL = null, hotFuel = false;
   if (!md.ev) {
-    const kmC = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed) ? r.gpsKm : null);
+    const kmC = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed && !r.truncated) ? r.gpsKm : null);
     if (kmC != null && r.spentL) {
       per100 = Math.round(r.spentL / kmC * 1000) / 10;
       normL = md.kmPerLiter ? Math.round(1000 / md.kmPerLiter) / 10 : null;
@@ -1348,13 +1441,13 @@ async function loadPeriod(el) {
       if (it.type === 'fill')   t1 = `<span style="color:var(--green)">Заправка +${it.l} л</span>`;
       if (it.type === 'drain')  t1 = `<span style="color:var(--red)">Злив? −${it.l} л</span>`;
       if (it.type === 'charge') t1 = `<span style="color:var(--green)">Зарядка +${it.pct}%${it.kwh!=null?` · ≈${it.kwh} кВт·год${it.uah!=null?` · ${it.uah} грн`:''}`:''}</span>`;
-      return `<div class="tli"${tap}><div class="tlt">${t}</div><div class="tlb"><div class="ic" style="background:${b[0]}">${b[1]}</div></div><div class="tlx"><div class="t1">${t1}</div><div class="t2" id="tla_${k}">${t2}</div></div></div>`;
+      return `<div class="tli"${tap}><div class="tlt">${t}</div><div class="tlb"><div class="ic" style="background:${b[0]}">${b[1]}</div></div><div class="tlx"><div class="t1">${t1}</div><div class="t2" id="tla_${seq}_${k}">${t2}</div></div></div>`;
     }).join('') + '</div>';
     // адреси подій — асинхронно (кеш + серійна черга, Nominatim не перевантажуємо)
     items.forEach((it,k)=>{
       if (!it.pt) return;
       geocode(it.pt[0], it.pt[1]).then(addr=>{
-        const el = document.getElementById('tla_'+k);
+        const el = document.getElementById('tla_'+seq+'_'+k);
         if (el) el.textContent = addr || (it.pt[0].toFixed(4)+', '+it.pt[1].toFixed(4));
       }).catch(()=>{});
     });
@@ -1390,6 +1483,7 @@ function drawTrack(track, stops) {
 }
 
 function closeDetail(){
+  _loadSeq++;   // рве пагінацію покинутого звіту (periodReport перевіряє isStale) — інакше «Місяць» тягнув 10×40к у фоні
   document.getElementById('detail').classList.remove('show');
   curDetail = null;
   if (dMap) { dMap.remove(); dMap = null; } _segHl = null;
