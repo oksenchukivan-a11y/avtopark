@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v68';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v69';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1061,8 +1061,17 @@ async function periodReport(id, from, to) {
     if (b - a < 120) return;
     const o1 = odoNear(a), o2 = odoNear(b);
     let km = (o1 != null && o2 != null) ? Math.round((o2-o1)*10)/10 : null;
-    if (km != null && km < 0.3) return;          // фактично не рухались
     if (km != null && km > 3000) km = null;      // глюк одометра
+    // Одометр по CAN може «спати» (Leaf шле пробіг рідко): обидва кінці короткої поїздки чіпляються
+    // за той самий семпл → km=0 → відрізок зникав, і авто «телепортувалось» між зупинками (баг, який
+    // зловив Іван). Якщо одометр не бачить руху, а швидкості є — міряємо відстань по GPS-треку.
+    if (km == null || km < 0.3) {
+      let g = 0, pv = null;
+      for (const p of track) if (p[2] != null && p[2] >= a && p[2] <= b) { if (pv) g += haversine(pv, p); pv = p; }
+      g = Math.round(g/100)/10;                  // метри → км, 1 знак
+      if (g >= 0.3) km = g;
+      else if (km != null) return;               // і одометр, і GPS кажуть «не рухались» — шум
+    }
     segments.push({ ts:a, dur:b-a, km, maxSpd:Math.round(mx) });
   }
   let cursor = from;
