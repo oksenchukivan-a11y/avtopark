@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v70';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v71';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -182,8 +182,9 @@ function fuelCurrent(dev, tel) {
   const md = (dev && typeof dev === 'object' && dev.metadata) || {};
   const pct = tv(tel, 'can.fuel.level');       // рівень палива, %
   const tank = tankFor(dev);
-  // КАЛІБРУВАННЯ: якщо OEM-літри ненадійні (metadata.fuelByPct) — рахуємо % × реальний бак
-  if (md.fuelByPct && pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank);
+  // КАЛІБРУВАННЯ: якщо OEM-літри ненадійні (metadata.fuelByPct) — рахуємо % × реальний бак.
+  // fuelFactor застосовується до БУДЬ-ЯКОГО джерела (звірка по чеку заправки: реальні літри ÷ показані)
+  if (md.fuelByPct && pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank * (md.fuelFactor || 1));
   // ПРИМІТКА: раніше тут був пріоритет для 'fuel.liters' (серверний плагін flespi msg-expression) —
   // прибрано назавжди: на Kangoo 8440 висів застарілий плагін з часів тестування Audi (формула %×0.7,
   // під 70-літровий бак), і мовчки перебивав правильний клієнтський розрахунок місяцями (показував 25 л
@@ -191,7 +192,7 @@ function fuelCurrent(dev, tel) {
   // без залежності від серверних плагінів, які легко забути відв'язати при зміні авто на пристрої.
   const vol = tv(tel, 'can.fuel.volume');      // реальні літри напряму (Master/Kangoo при русі)
   if (vol != null && vol > 0) return Math.round(vol * (md.fuelFactor || 1));   // множник калібрування
-  if (pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank);
+  if (pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank * (md.fuelFactor || 1));
   return null;
 }
 // Для відображення: поточне значення, інакше останнє відоме (кеш освіжається з історії в renderCards).
@@ -221,7 +222,7 @@ async function lastValidFuel(dev){
       if (res) for (const m of res) {
         const v = m[field];
         if (v != null && v > 0) {
-          const l = (field === 'can.fuel.level') ? (tank ? Math.round(v/100*tank) : null) : Math.round(v * (md.fuelFactor || 1));
+          const l = (field === 'can.fuel.level') ? (tank ? Math.round(v/100*tank * (md.fuelFactor || 1)) : null) : Math.round(v * (md.fuelFactor || 1));
           if (l != null) { lastFuel[dev.id] = l; lastFuelTs[dev.id] = Date.now(); try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} return l; }
         }
       }
@@ -960,7 +961,7 @@ async function periodReport(id, from, to, isStale) {
   // 2) усі повідомлення періоду — лише потрібні поля, З ПАГІНАЦІЄЮ: при 2-сек піллінгу тиждень/місяць — це
   // СОТНІ тисяч рядків, а один запит віддає перші 40к → місячний звіт мовчки покривав лише перші дні
   // (і odoKm за весь місяць проти gpsKm за огризок давав фальшивий «⚠ РЕБ»)
-  const FIELDS = 'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level,can.vehicle.battery.level';
+  const FIELDS = 'timestamp,position.latitude,position.longitude,position.speed,position.valid,position.satellites,position.hdop,can.vehicle.mileage,vehicle.mileage,can.vehicle.speed,can.fuel.volume,can.fuel.level,can.vehicle.battery.level,gnss.state.enum';
   let msgs = [], pageFrom = from, truncated = false;
   for (let page = 0; page < 10; page++) {                       // до 400к повідомлень; далі чесно позначаємо обрізання
     if (isStale && isStale()) { truncated = true; break; }
@@ -981,6 +982,7 @@ async function periodReport(id, from, to, isStale) {
   const track = [];
   let gpsM = 0, prevPt = null, prevTs = null, lastTrackPt = null;
   let firstFuel = null, lastFuel = null, prevFuel = null, prevFuelTs = null;
+  let jamSec = 0, prevJamTs = null;   // скільки часу під критичним глушінням (АЗС/РЕБ): GNSS-одометр і трек у цей час СТОЯТЬ
   let prevSoc = null, prevSocTs = null; const charges = [];   // ⚡ сесії зарядки електрички: зростання SoC на стоянці
   const fills = [], drains = [];
   const stops = [];
@@ -1019,6 +1021,13 @@ async function periodReport(id, from, to, isStale) {
     else goodFix = true;
     // дефолтна точка трекера (Ліма) зрідка приходить НАВІТЬ з valid=true — географічний щит обовʼязковий
     if (lat != null && lon != null && !saneRegion(lat, lon)) goodFix = false;
+
+    // облік глушіння: gnss.state.enum=2 → GNSS мертвий, трек і GNSS-одометр стоять, кілометри «зникають»
+    const jamE = m['gnss.state.enum'];
+    if (jamE === 2 && ts != null) {
+      if (prevJamTs != null) jamSec += Math.min(ts - prevJamTs, 300);   // дірки >5 хв не роздувають лічильник
+      prevJamTs = ts;
+    } else if (jamE != null) prevJamTs = null;
 
     // ШВИДКІСТЬ: пріоритет — спідометр авто по CAN (РЕБ-стійкий, не бреше). GPS-швидкість беремо ЛИШЕ
     // з валідним фіксом: під глушінням телепорти давали фантомні «199 км/г» у макс. швидкість дня.
@@ -1067,11 +1076,11 @@ async function periodReport(id, from, to, isStale) {
     const fpct = m['can.fuel.level'];
     let flv = null;
     if (mdR.fuelByPct) {
-      if (fpct != null && fpct > 0 && tank) flv = fpct/100*tank;
+      if (fpct != null && fpct > 0 && tank) flv = fpct/100*tank * (mdR.fuelFactor || 1);
     } else {
       flv = m['can.fuel.volume'];
       if (flv != null && flv > 0 && mdR.fuelFactor) flv = flv * mdR.fuelFactor;
-      if ((flv == null || flv <= 0) && fpct != null && tank) flv = fpct/100*tank;
+      if ((flv == null || flv <= 0) && fpct != null && tank) flv = fpct/100*tank * (mdR.fuelFactor || 1);
     }
     // глюк-фільтр: паливо не може бути більшим за бак (запас ходу теж «бреше» — той самий клас сенсорного сміття)
     if (flv != null && tank && flv > tank * 1.15) flv = null;
@@ -1185,7 +1194,7 @@ async function periodReport(id, from, to, isStale) {
     c.pct = Math.round(c.pct);
   });
 
-  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost,
+  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec,
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
@@ -1370,7 +1379,8 @@ async function loadPeriod(el) {
   // середній розхід л/100км (дизель): витрачені літри ÷ пробіг; одометр надійніший за GPS під РЕБ
   let per100 = null, normL = null, hotFuel = false;
   if (!md.ev) {
-    const kmC = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed && !r.truncated) ? r.gpsKm : null);
+    const jamHole = (r.jamSec || 0) > 300;   // >5 хв критичного глушіння за період
+    const kmC = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed && !r.truncated && !jamHole) ? r.gpsKm : null);
     if (kmC != null && r.spentL) {
       per100 = Math.round(r.spentL / kmC * 1000) / 10;
       normL = md.kmPerLiter ? Math.round(1000 / md.kmPerLiter) / 10 : null;
@@ -1398,6 +1408,9 @@ async function loadPeriod(el) {
       <h3>Зведення · ${dstr(from)}–${dstr(perEnd)} (${perDays} дн)</h3>
       <div class="tiles">${tiles.join('')}</div>
       ${jammed?`<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:0 0 6px">⚠ GPS глушився (РЕБ) — орієнтуйся на одометр</div>`:''}
+      ${(() => { const js = r.jamSec || 0; if (js <= 300 || jammed) return '';
+        const noCan = r.odoKm == null;   // авто без CAN-одометра (Ducato): кілометри під глушінням ЗНИКАЮТЬ
+        return `<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:0 0 6px">🚫 GPS глушився ${fmtDur(js)}${noCan ? ' — частина пробігу НЕ порахована (авто без CAN-одометра), розхід за день не показуємо' : ''}</div>`; })()}
       ${!md.ev ? `<div class="row"><span class="k">⛽ Залито</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
       <div class="row"><span class="k">🔴 Злито</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>` : ''}
       <div class="row"><span class="k">🅿️ Стояв</span><span class="val">${r.standSec ? fmtDur(r.standSec) : '—'}</span></div>
@@ -1545,7 +1558,14 @@ function init() {
   if (!window._visHooked) {
     window._visHooked = true;
     const softRefresh = () => { clearTimeout(window._softT); window._softT = setTimeout(refresh, 500); };
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) softRefresh(); });
+    // повернувся в застосунок після паузи >2 хв → карта знову центрується на всіх авто
+    // (інакше вона лишалась там, де її востаннє посунули, і машин на екрані не було видно)
+    let _hiddenAt = 0;
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { _hiddenAt = Date.now(); return; }
+      if (_hiddenAt && Date.now() - _hiddenAt > 120000 && map) map._fitted = false;
+      softRefresh();
+    });
     window.addEventListener('focus', softRefresh);
     window.addEventListener('pageshow', softRefresh);
   }
