@@ -2,10 +2,13 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v71';          // показуємо в шапці — щоб видно було, що отримав свіже
-const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с (норма)
+const APP_VERSION = 'v72';          // показуємо в шапці — щоб видно було, що отримав свіже
+const REFRESH_MS = 10000;          // авто-оновлення кожні 10 с (норма) — частіше, ніж було (15 с), щоб точніше ловити рух і момент кінця глушіння
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
+// Фізична стеля правдоподібності: стрибок позиції, що вимагає БІЛЬШОЇ швидкості між оновленнями, — це спуф/сміття РЕБ, а не реальний рух. Такі точки на карту не наносимо.
+const MAX_JUMP_KMH = 150;
+const MAX_HDOP = 12;               // геометрія супутників гірша за це — фікс ненадійний (норма 0.5–3; спуф інколи дає абсурдний HDOP)
 const SIM_SUSPECT_MS = 4 * 3600000; // авто мовчить 4+ год, коли інші на звʼязку → підозра на баланс SIM/покриття
 const ONLINE_SEC = 600;            // онлайн, якщо дані свіжіші за 10 хв
 const FILL_L = 5;                  // або стрибок > 5 л = заправка (для авто, що дають літри)
@@ -374,14 +377,28 @@ function voltHealth(v){   // оцінка стану 12В акумулятора
 function rangeKm(tel){ const r = tv(tel,'can.vehicle.remaining.range'); return (r != null && r > 0 && r <= 1500) ? Math.round(r) : null; }
 // РЕБ-глушіння GPS (Teltonika AVL ID 318 «GNSS Jamming»): 0=нема, 1=попередження (сигнал ослаблений, фікс ще тримається), 2=критично (фікс неможливий).
 // Це офіційний індикатор глушіння з трекера — набагато точніший за здогад «просто нема фіксу довго» (могло виглядати як несправна антена).
+// ===== Якість GPS-фікса (єдине джерело правди про «чи можна вірити координатам») =====
+// Під час РЕБ трекер часто шле СФАБРИКОВАНИЙ фікс: position.valid=true, але 0 супутників і координати
+// зсунуті на десятки км (лишаючись у межах України, тому geo-щит saneRegion сам це не ловить).
+// Тому «твердим» вважаємо фікс лише коли: явно валідний + супутників ≥4 + у нашому регіоні + HDOP притомний.
+function fixQuality(tel){
+  const valid = tv(tel,'position.valid');
+  const sats  = tv(tel,'position.satellites');
+  const hdop  = tv(tel,'position.hdop');
+  const lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
+  const inRegion = lat != null && lon != null && saneRegion(lat, lon);
+  const solid = valid === true && sats != null && sats >= 4 && inRegion && (hdop == null || hdop <= MAX_HDOP);
+  return { valid, sats, hdop, lat, lon, inRegion, solid };
+}
 function gnssJamState(tel){
   const s = tv(tel,'gnss.state.enum');
   if (s !== 1 && s !== 2) return 0;
-  // Глушіння показуємо ЛИШЕ коли воно реально відбирає позицію (нема валідного фікса).
-  // Рівень 1 = «сигнал ослаблений, але фікс тримається» — якщо фікс валідний, GPS фактично працює,
-  // і жовта тривога «під РЕБ» лише лякає даремно (авто на карті живе й точне). Те саме після кінця
-  // глушіння: прапорець може ще висіти в телеметрії, а фікс уже валідний.
-  if (tv(tel,'position.valid') === true) return 0;
+  // Глушіння показуємо ЛИШЕ коли воно реально відбирає позицію (нема ТВЕРДОГО фікса).
+  // Рівень 1 = «сигнал ослаблений, але фікс тримається» — якщо фікс справді твердий (≥4 супутники),
+  // GPS фактично працює, і жовта тривога «під РЕБ» лише лякає даремно. Те саме після кінця глушіння.
+  // ВАЖЛИВО: перевіряємо саме fixQuality.solid, а НЕ голий position.valid — під час спуфінгу valid=true
+  // приходить із 0 супутників (брехня), і раніше це хибно гасило індикатор → лічильник стрибав на «0 хв».
+  if (fixQuality(tel).solid) return 0;
   return s;
 }
 // відколи авто під глушінням (щоб показувати «глушиться вже Х хв», а не просто статичний прапорець)
@@ -491,6 +508,28 @@ try { lastValidPosTs = JSON.parse(localStorage.getItem('lastValidPosTs') || '{}'
   } catch(e){}
 }
 const GPS_LOST_MS = 20 * 60 * 1000;   // якщо валідного фіксу нема довше 20 хв — це вже не «дрижання», а реальна проблема (антена/апаратура)
+
+// ===== Чи можна ДОВІРЯТИ поточним координатам як новій позиції на карті =====
+// Це і є захист від «стрибків»: приймаємо точку ЛИШЕ якщо (1) фікс твердий (є супутники, не спуф),
+// (2) немає активного глушіння і (3) стрибок від останньої відомої точки фізично правдоподібний.
+// Інакше тримаємо last-known-good — рівно як референсний трекер: маркер стоїть, а не телепортується.
+function trustPosition(devId, tel){
+  const fq = fixQuality(tel);
+  if (!fq.solid) return false;             // нема твердого фікса (0 супутників / невалідний / поза регіоном / спуф)
+  if (gnssJamState(tel) > 0) return false; // трекер прямо рапортує РЕБ — не рухаємо, навіть якщо фікс «виглядає» валідним
+  const prev = lastValidPos[devId], prevTs = lastValidPosTs[devId];
+  if (prev && prevTs){
+    const dt = (Date.now() - prevTs) / 1000;                 // секунд від останньої валідної точки
+    if (dt > 0){
+      const distKm = haversine(prev, [fq.lat, fq.lon]) / 1000;
+      const kmh = distKm / (dt / 3600);
+      // відкидаємо лише ЯВНИЙ телепорт: помітна відстань за замалий час. Дрібний GPS-шум (<0.5 км) і
+      // великі паузи (авто стояло, потім реально поїхало далеко) проходять — швидкість тоді низька.
+      if (distKm > 0.5 && kmh > MAX_JUMP_KMH) return false;
+    }
+  }
+  return true;
+}
 
 let _renderFp = '', _renderSkips = 0;
 async function loadDevices() {
@@ -611,12 +650,12 @@ function renderCards(devs) {
     const diagHtml = diag.length
       ? `<div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--dim);flex-wrap:wrap">${diag.map(x=>`<span>${x}</span>`).join('')}</div>`
       : '';
-    // де стоїть (адреса) — лише для незадіяних на звʼязку
-    const posValid = tv(tel,'position.valid') !== false;     // валідний GPS-фікс (не дефолтна точка Перу)
-    const showLoc = !active && lat != null && lon != null && posValid && saneRegion(lat, lon);   // геощит і тут (Ліма буває з valid=true)
+    // де стоїть (адреса) — лише для незадіяних на звʼязку і лише за ТВЕРДИМ фіксом (не спуф, не 0 супутників)
+    const fqC = fixQuality(tel);
+    const showLoc = !active && fqC.solid;
     // GPS втрачено надовго — розрізняємо ПРИЧИНУ: офіційний індикатор глушіння (РЕБ) з трекера, або справді апаратна проблема
     const gpsLostMsC = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
-    const gpsLostLong = !posValid && gpsLostMsC != null && gpsLostMsC > GPS_LOST_MS;
+    const gpsLostLong = !fqC.solid && gpsLostMsC != null && gpsLostMsC > GPS_LOST_MS;
     const jam = gnssJamState(tel);
     const jamMs = jamDuration(d.id, jam);
     maybeAutoReboot(d, tel);   // GPS-модуль завис після довгого глушіння → авто-cpureset (див. комент функції)
@@ -625,7 +664,7 @@ function renderCards(devs) {
       : (jam === 2 ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs/1000)} — сигнал відсутній</div>`
       : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS ослаблений вже ${fmtDur(jamMs/1000)} (можливе глушіння)</div>`
       : (gpsLostLong ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
-      : ((!active && lat != null && lon != null && !posValid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу</div>` : ''))));
+      : ((!active && lat != null && lon != null && !fqC.solid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу</div>` : ''))));
     // тривога: помилки двигуна / перегрів — щоб проблемне авто було видно одразу
     const et = engineTemp(tel), dtc = dtcCount(tel);
     const alerts = [];
@@ -734,7 +773,8 @@ function renderMap(devs) {
     const tel = d.telemetry || {};
     let lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
     const valid = tv(tel,'position.valid');
-    if (lat != null && lon != null && valid !== false && saneRegion(lat, lon)) {
+    const trusted = trustPosition(d.id, tel);   // твердий фікс + нема глушіння + правдоподібний стрибок
+    if (trusted) {
       lastValidPos[d.id] = [lat, lon];                              // свіжа валідна точка — запамʼятовуємо
       lastValidPosTs[d.id] = Date.now();
       try {
@@ -742,7 +782,7 @@ function renderMap(devs) {
         localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
       } catch(e){}
     } else if (lastValidPos[d.id]) {
-      lat = lastValidPos[d.id][0]; lon = lastValidPos[d.id][1];     // нема фіксу → показуємо ОСТАННЮ ВІДОМУ (не Перу, не зникає)
+      lat = lastValidPos[d.id][0]; lon = lastValidPos[d.id][1];     // спуф/глушіння/нема фіксу → тримаємо ОСТАННЮ ВІДОМУ (маркер не стрибає)
     }
     if (lat == null || lon == null) continue;                       // позиції ще ніколи не було
     const online = statusOnline(tel);
@@ -752,7 +792,8 @@ function renderMap(devs) {
     const gpsLostMs = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
     const jamState = gnssJamState(tel);
     const jamMs2 = jamDuration(d.id, jamState);
-    const gpsLost = jamState > 0 || (valid === false && gpsLostMs != null && gpsLostMs > GPS_LOST_MS);
+    // «точка застаріла» тепер = не довіряємо позиції довше GPS_LOST_MS (ловить і спуф із valid=true, не лише valid=false)
+    const gpsLost = jamState > 0 || (!trusted && gpsLostMs != null && gpsLostMs > GPS_LOST_MS);
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
     const gpsWarn = jamState === 2 ? `<br>🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs2/1000)}`
