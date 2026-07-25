@@ -2,8 +2,8 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v73';          // показуємо в шапці — щоб видно було, що отримав свіже
-const REFRESH_MS = 10000;          // авто-оновлення кожні 10 с (норма) — частіше, ніж було (15 с), щоб точніше ловити рух і момент кінця глушіння
+const APP_VERSION = 'v74';          // показуємо в шапці — щоб видно було, що отримав свіже
+const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
 // Фізична стеля правдоподібності: стрибок позиції, що вимагає БІЛЬШОЇ швидкості між оновленнями, — це спуф/сміття РЕБ, а не реальний рух. Такі точки на карту не наносимо.
@@ -203,7 +203,7 @@ function fuelLiters(dev, tel) {
   const id = dev && dev.id;
   const live = fuelCurrent(dev, tel);
   if (live != null && live > 0) {
-    if (id) { lastFuel[id] = live; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} }
+    if (id && lastFuel[id] !== live) { lastFuel[id] = live; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} }   // пишемо лише зміну
     return live;
   }
   if (id && lastFuel[id] != null) return lastFuel[id];   // заглушене — останнє відоме
@@ -401,15 +401,25 @@ function gnssJamState(tel){
   if (fixQuality(tel).solid) return 0;
   return s;
 }
-// відколи авто під глушінням (щоб показувати «глушиться вже Х хв», а не просто статичний прапорець)
-let jamStartTs = {};
+// відколи авто під глушінням (щоб показувати «глушиться вже Х хв», а не просто статичний прапорець).
+// ГІСТЕРЕЗИС (v74): епізод закривається лише після 3 хв БЕЗПЕРЕРВНО чистого стану. Без цього
+// мерехтіння супутників 3↔5 на межі порогу обнуляло лічильник щоцикла → fast-poll перевзводився
+// нескінченно (навантаження на ліміт flespi), а 6-год поріг авто-перезавантаження ніколи не накопичувався.
+const JAM_CLEAR_MS = 3 * 60000;
+let jamStartTs = {}, _jamCleanSince = {};
 try { jamStartTs = JSON.parse(localStorage.getItem('jamStartTs') || '{}'); } catch(e) { jamStartTs = {}; }
 function jamDuration(devId, jamState){
   if (jamState > 0) {
+    delete _jamCleanSince[devId];
     if (!jamStartTs[devId]) { jamStartTs[devId] = Date.now(); try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){} }
     return Date.now() - jamStartTs[devId];
   }
-  if (jamStartTs[devId]) { delete jamStartTs[devId]; try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){} }
+  if (jamStartTs[devId]) {
+    if (!_jamCleanSince[devId]) _jamCleanSince[devId] = Date.now();
+    if (Date.now() - _jamCleanSince[devId] < JAM_CLEAR_MS) return Date.now() - jamStartTs[devId];   // ще не віримо, що скінчилось
+    delete jamStartTs[devId]; delete _jamCleanSince[devId];
+    try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){}
+  }
   return 0;
 }
 // ===== АВТОЛІКУВАННЯ зависання GPS-модуля =====
@@ -513,31 +523,30 @@ const GPS_LOST_MS = 20 * 60 * 1000;   // якщо валідного фіксу 
 // Це і є захист від «стрибків»: приймаємо точку ЛИШЕ якщо (1) фікс твердий (є супутники, не спуф),
 // (2) немає активного глушіння і (3) стрибок від останньої відомої точки фізично правдоподібний.
 // Інакше тримаємо last-known-good — рівно як референсний трекер: маркер стоїть, а не телепортується.
+// Повертає ҐРАДАЦІЮ довіри (v74, за код-ревʼю): 'solid' — твердий фікс, оновлює ЯКІР last-known-good;
+// 'tentative' — показати можна (жовтий прапорець глушіння висить), але якір НЕ чіпати; false — не показувати.
+// Ключові принципи після ревʼю:
+//  1. Твердий фікс перевіряється ПЕРШИМ і приймається завжди — інакше чесний фікс після РЕБ
+//     блокувався телепорт-фільтром на dist/150 годин (якір застарів, швидкість «астрономічна»).
+//  2. Якір оновлюють ЛИШЕ solid-фікси — інакше повзучий спуф крок за кроком перетягував еталон,
+//     а детектори «мертва антена / точка застаріла» ніколи не спрацьовували (Ts освіжався щоцикла).
+//  3. Телепорт-фільтр застосовується лише до НЕтвердих точок, відносно останнього solid-якоря.
 function trustPosition(devId, tel){
-  // v73: перша версія цього фільтра (v72) під АКТИВНИМ глушінням не рухала маркери взагалі —
-  // а РЕБ у Сумах триває ДНЯМИ, тож всі авто «зависли» на точках пʼятниці, хоча трекери
-  // давно передавали свіжі координати. Новий баланс: телепорти-спуфи ріжемо, чесні точки — показуємо.
   const fq = fixQuality(tel);
   if (fq.lat == null || fq.lon == null || !fq.inRegion) return false;   // сміття/Ліма — ні
-  // телепорт-фільтр для БУДЬ-ЯКОЇ точки: помітна відстань за замалий час = спуф, тримаємо стару
+  if (fq.solid) return 'solid';
   const prev = lastValidPos[devId], prevTs = lastValidPosTs[devId];
-  let distKm = null;
   if (prev && prevTs){
     const dt = (Date.now() - prevTs) / 1000;
-    if (dt > 0){
-      distKm = haversine(prev, [fq.lat, fq.lon]) / 1000;
-      const kmh = distKm / (dt / 3600);
-      // дрібний дрейф (<0.5 км) і далекі переїзди після довгої паузи проходять — швидкість тоді низька
-      if (distKm > 0.5 && kmh > MAX_JUMP_KMH) return false;
-    }
+    if (dt <= 0) return false;                                          // сміттєвий час — не віримо нетвердій точці
+    const distKm = haversine(prev, [fq.lat, fq.lon]) / 1000;
+    const kmh = distKm / (dt / 3600);
+    // дрібний дрейф (<0.5 км) і далекі переїзди після довгої паузи проходять — швидкість тоді низька
+    if (distKm > 0.5 && kmh > MAX_JUMP_KMH) return false;
   }
-  if (fq.solid) return true;   // твердий фікс (≥4 супутники) — повна довіра
-  // «valid=true» БЕЗ супутників = класичний спуф під РЕБ: дозволяємо лише дрейф поруч зі старою точкою,
-  // щоб маркер не «мандрував» у сфабриковане місце
-  if (fq.valid === true) return distKm == null || distKm < 2;
-  // невалідна, але в нашому регіоні й без телепорта — остання точка, яку трекер сам вважає актуальною.
-  // Показуємо ЇЇ (жовтий прапорець глушіння і так висить) — це чесніше, ніж позиція тижневої давнини.
-  return true;
+  // нетверда, але в регіоні й правдоподібна відносно якоря — показуємо як приблизну
+  // (це і є «РЕБ днями»: краще свіжа приблизна точка з прапорцем, ніж позиція тижневої давнини)
+  return 'tentative';
 }
 
 let _renderFp = '', _renderSkips = 0;
@@ -552,6 +561,7 @@ async function loadDevices() {
   const fp = devs.map(d => {
     const t = d.telemetry || {};
     return [d.id, Math.floor((tv(t,'server.timestamp')||0)/60), tv(t,'position.speed'), tv(t,'position.valid'),
+            tv(t,'position.satellites'), Math.round((tv(t,'position.latitude')||0)*1000), Math.round((tv(t,'position.longitude')||0)*1000),
             Math.round((tv(t,'external.powersource.voltage')||0)*10), tv(t,'engine.ignition.status'),
             tv(t,'movement.status'), tv(t,'gnss.state.enum'), tv(t,'can.fuel.volume'), tv(t,'can.fuel.level'),
             tv(t,'can.vehicle.mileage')].join(',');
@@ -778,21 +788,30 @@ function renderMap(devs) {
     L.control.layers(bl, {}, { position:'topright' }).addTo(map);
   }
   const pts = [];
+  let posDirty = false;   // localStorage пишемо ОДИН раз після циклу і лише якщо щось змінилось (було до 120 записів/хв)
   for (const d of devs) {
     const tel = d.telemetry || {};
     let lat = tv(tel,'position.latitude'), lon = tv(tel,'position.longitude');
-    const valid = tv(tel,'position.valid');
-    const trusted = trustPosition(d.id, tel);   // твердий фікс + нема глушіння + правдоподібний стрибок
-    if (trusted) {
-      lastValidPos[d.id] = [lat, lon];                              // свіжа валідна точка — запамʼятовуємо
-      lastValidPosTs[d.id] = Date.now();
-      try {
-        localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
-        localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
-      } catch(e){}
-    } else if (lastValidPos[d.id]) {
-      lat = lastValidPos[d.id][0]; lon = lastValidPos[d.id][1];     // спуф/глушіння/нема фіксу → тримаємо ОСТАННЮ ВІДОМУ (маркер не стрибає)
+    const trusted = trustPosition(d.id, tel);   // 'solid' | 'tentative' | false
+    // ЯКІР оновлюють лише solid-фікси зі СВІЖОЮ телеметрією: рендер зі снапшота (init) чи заснулого
+    // трекера інакше штампував Ts=now зі старими координатами і потім блокував чесний новий фікс
+    const telAge = Date.now()/1000 - (tv(tel,'server.timestamp') || 0);
+    if (trusted === 'solid' && telAge < 600) {
+      const old = lastValidPos[d.id];
+      if (!old || old[0] !== lat || old[1] !== lon || Date.now() - (lastValidPosTs[d.id]||0) > 60000) {
+        lastValidPos[d.id] = [lat, lon];
+        lastValidPosTs[d.id] = Date.now();
+        posDirty = true;
+      }
+    } else if (!trusted) {
+      if (lastValidPos[d.id]) {
+        lat = lastValidPos[d.id][0]; lon = lastValidPos[d.id][1];   // спуф/сміття → тримаємо ОСТАННЮ ДОБРУ (маркер не стрибає)
+      } else if (lat == null || lon == null || !saneRegion(lat, lon)) {
+        continue;   // свіжа інсталяція + сміття (Ліма) — краще без маркера, ніж карта зумиться на Перу
+      }
+      // свіжа інсталяція, точка в регіоні, але недовірена: показуємо як є — прапорці глушіння скажуть, що вона приблизна
     }
+    // 'tentative' → малюємо координати трекера, якір не чіпаємо
     if (lat == null || lon == null) continue;                       // позиції ще ніколи не було
     const online = statusOnline(tel);
     const active = displayActive(d, tel, online);
@@ -802,7 +821,7 @@ function renderMap(devs) {
     const jamState = gnssJamState(tel);
     const jamMs2 = jamDuration(d.id, jamState);
     // «точка застаріла» тепер = не довіряємо позиції довше GPS_LOST_MS (ловить і спуф із valid=true, не лише valid=false)
-    const gpsLost = jamState > 0 || (!trusted && gpsLostMs != null && gpsLostMs > GPS_LOST_MS);
+    const gpsLost = jamState > 0 || (trusted !== 'solid' && gpsLostMs != null && gpsLostMs > GPS_LOST_MS);   // і tentative-точки старіють: мертва антена → жовтий пунктир
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
     const gpsWarn = jamState === 2 ? `<br>🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs2/1000)}`
@@ -816,6 +835,12 @@ function renderMap(devs) {
     } else {
       markers[d.id] = markerFor(d, [lat,lon], online, active, gpsLost).addTo(map).bindPopup(html);
     }
+  }
+  if (posDirty) {
+    try {
+      localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
+      localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
+    } catch(e){}
   }
   // маркери-привиди: пристрій зник з flespi (видалили/перенесли) — прибираємо з карти, інакше висить зі старою позицією
   for (const mid of Object.keys(markers)) {
@@ -1066,7 +1091,7 @@ async function periodReport(id, from, to, isStale) {
     const valid = m['position.valid'];
     const sats = m['position.satellites'];
     let goodFix;
-    if (valid !== undefined && valid !== null) goodFix = (valid === true);
+    if (valid !== undefined && valid !== null) goodFix = (valid === true) && (sats == null || sats >= 3);   // valid=true з 0 супутників = спуф (ревʼю v74)
     else if (sats !== undefined && sats !== null) goodFix = (sats >= 3);
     else goodFix = true;
     // дефолтна точка трекера (Ліма) зрідка приходить НАВІТЬ з valid=true — географічний щит обовʼязковий
@@ -1132,8 +1157,9 @@ async function periodReport(id, from, to, isStale) {
       if (flv != null && flv > 0 && mdR.fuelFactor) flv = flv * mdR.fuelFactor;
       if ((flv == null || flv <= 0) && fpct != null && tank) flv = fpct/100*tank * (mdR.fuelFactor || 1);
     }
-    // глюк-фільтр: паливо не може бути більшим за бак (запас ходу теж «бреше» — той самий клас сенсорного сміття)
-    if (flv != null && tank && flv > tank * 1.15) flv = null;
+    // глюк-фільтр: паливо не може бути більшим за бак; порівнюємо З УРАХУВАННЯМ множника,
+    // інакше fuelFactor≥1.15 робив чесний повний бак «глюком» і нулив усі 100%-покази
+    if (flv != null && tank && flv > tank * 1.15 * (mdR.fuelFactor || 1)) flv = null;
     if (flv != null && flv > 0) {
       if (firstFuel == null) firstFuel = flv;
       lastFuel = flv;
@@ -1613,7 +1639,7 @@ function init() {
     let _hiddenAt = 0;
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { _hiddenAt = Date.now(); return; }
-      if (_hiddenAt && Date.now() - _hiddenAt > 120000 && map) map._fitted = false;
+      if (_hiddenAt && Date.now() - _hiddenAt > 120000 && map) { map._fitted = false; _renderFp = ''; }   // і форсуємо рендер, інакше fingerprint-скіп відкладав рецентрування
       softRefresh();
     });
     window.addEventListener('focus', softRefresh);
