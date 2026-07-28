@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v74';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v75';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -30,6 +30,8 @@ function saveToken() {
   if (!t) return alert('Встав токен');
   localStorage.setItem('flespi_token', t);
   init();
+checkVersion(true);                       // одразу на старті
+setInterval(() => checkVersion(), 600000); // і раз на 10 хв, поки застосунок відкритий
 }
 function logout() {
   if (!confirm('Вийти і забути токен?')) return;
@@ -1640,6 +1642,7 @@ function init() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { _hiddenAt = Date.now(); return; }
       if (_hiddenAt && Date.now() - _hiddenAt > 120000 && map) { map._fitted = false; _renderFp = ''; }   // і форсуємо рендер, інакше fingerprint-скіп відкладав рецентрування
+      checkVersion();      // повернулись у застосунок — переконуємось, що код свіжий
       softRefresh();
     });
     window.addEventListener('focus', softRefresh);
@@ -1649,6 +1652,28 @@ function init() {
 
 // АВТО-ОНОВЛЕННЯ: завжди тягнемо свіжий sw.js (без кешу браузера), і коли нова версія
 // бере контроль — застосунок сам перезавантажується зі свіжим кодом. Кінець «застряглому кешу».
+// ===== ЖОРСТКА перевірка версії (v75) =====
+// Симптом, який ловив Іван: телефон тримав СТАРИЙ код (напр. v72, де маркери під глушінням не рухались
+// узагалі) — виглядало як «машини підвисли», хоча flespi і прод давно віддавали свіжі координати.
+// Оновлення через service worker на iOS-PWA іноді не доїжджає (застосунок місяцями «живе» у фоні),
+// тому додатково питаємо крихітний version.txt повз усі кеші й самі перезавантажуємось при розбіжності.
+let _verChecking = false, _verLastCheck = 0;
+async function checkVersion(force){
+  if (_verChecking) return;
+  if (!force && Date.now() - _verLastCheck < 300000) return;   // не частіше разу на 5 хв
+  _verChecking = true; _verLastCheck = Date.now();
+  try {
+    const r = await fetch('./version.txt?nc=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const live = (await r.text()).trim();
+    if (live && /^v\d+$/.test(live) && live !== APP_VERSION) {
+      try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); } catch(e){}
+      location.reload();
+    }
+  } catch(e){ /* офлайн — не заважаємо */ }
+  finally { _verChecking = false; }
+}
+
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
     reg.update();
