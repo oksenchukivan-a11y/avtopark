@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v75';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v76';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -176,6 +176,16 @@ function tankFor(x) {
   if (TANKS[id] && TANKS[id].tank) return TANKS[id].tank;
   return null;
 }
+// Фізична стеля палива: у баку НЕ може бути більше за його ємність. Спільний хелпер для картки,
+// історії й детекції заправок — щоб правило було ОДНАКОВЕ для всіх авто (вимога власника).
+// Причина: OEM-датчик Renault Master над-читає (~97 л сирих при баку 80) → картка показувала 105 л,
+// а фільтр глюків «>бак» нулив КОЖЕН замір, і заправка не детектувалась. Тепер: явне сміття (>бак×1.6)
+// відкидаємо, помірний перебір м'яко обрізаємо до ємності — і показ правдивий, і детекція заправки жива.
+function capFuel(liters, tank) {
+  if (liters == null || !tank) return liters;
+  if (liters > tank * 1.6) return null;   // сенсорне сміття — не віримо
+  return liters > tank ? tank : liters;   // повний бак = ємність, не більше
+}
 
 // ===== Паливо у літрах =====
 // памʼять останнього відомого палива (деякі авто, як Ducato, перестають слати рівень коли заглушені → 0/нема)
@@ -189,15 +199,15 @@ function fuelCurrent(dev, tel) {
   const tank = tankFor(dev);
   // КАЛІБРУВАННЯ: якщо OEM-літри ненадійні (metadata.fuelByPct) — рахуємо % × реальний бак.
   // fuelFactor застосовується до БУДЬ-ЯКОГО джерела (звірка по чеку заправки: реальні літри ÷ показані)
-  if (md.fuelByPct && pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank * (md.fuelFactor || 1));
+  if (md.fuelByPct && pct != null && pct > 0 && tank) return capFuel(Math.round(pct / 100 * tank * (md.fuelFactor || 1)), tank);
   // ПРИМІТКА: раніше тут був пріоритет для 'fuel.liters' (серверний плагін flespi msg-expression) —
   // прибрано назавжди: на Kangoo 8440 висів застарілий плагін з часів тестування Audi (формула %×0.7,
   // під 70-літровий бак), і мовчки перебивав правильний клієнтський розрахунок місяцями (показував 25 л
   // замість реальних ~21 л). Калібрування тепер ЛИШЕ клієнтське (metadata.fuelFactor/fuelByPct/tank),
   // без залежності від серверних плагінів, які легко забути відв'язати при зміні авто на пристрої.
   const vol = tv(tel, 'can.fuel.volume');      // реальні літри напряму (Master/Kangoo при русі)
-  if (vol != null && vol > 0) return Math.round(vol * (md.fuelFactor || 1));   // множник калібрування
-  if (pct != null && pct > 0 && tank) return Math.round(pct / 100 * tank * (md.fuelFactor || 1));
+  if (vol != null && vol > 0) return capFuel(Math.round(vol * (md.fuelFactor || 1)), tank);   // множник калібрування + стеля бака
+  if (pct != null && pct > 0 && tank) return capFuel(Math.round(pct / 100 * tank * (md.fuelFactor || 1)), tank);
   return null;
 }
 // Для відображення: поточне значення, інакше останнє відоме (кеш освіжається з історії в renderCards).
@@ -227,7 +237,7 @@ async function lastValidFuel(dev){
       if (res) for (const m of res) {
         const v = m[field];
         if (v != null && v > 0) {
-          const l = (field === 'can.fuel.level') ? (tank ? Math.round(v/100*tank * (md.fuelFactor || 1)) : null) : Math.round(v * (md.fuelFactor || 1));
+          const l = capFuel((field === 'can.fuel.level') ? (tank ? Math.round(v/100*tank * (md.fuelFactor || 1)) : null) : Math.round(v * (md.fuelFactor || 1)), tank);
           if (l != null) { lastFuel[dev.id] = l; lastFuelTs[dev.id] = Date.now(); try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} return l; }
         }
       }
@@ -1159,9 +1169,10 @@ async function periodReport(id, from, to, isStale) {
       if (flv != null && flv > 0 && mdR.fuelFactor) flv = flv * mdR.fuelFactor;
       if ((flv == null || flv <= 0) && fpct != null && tank) flv = fpct/100*tank * (mdR.fuelFactor || 1);
     }
-    // глюк-фільтр: паливо не може бути більшим за бак; порівнюємо З УРАХУВАННЯМ множника,
-    // інакше fuelFactor≥1.15 робив чесний повний бак «глюком» і нулив усі 100%-покази
-    if (flv != null && tank && flv > tank * 1.15 * (mdR.fuelFactor || 1)) flv = null;
+    // стеля бака — ТИМ САМИМ хелпером, що й картка (capFuel): помірний перебір м'яко обрізаємо до ємності,
+    // явне сміття (>бак×1.6) відкидаємо. Раніше тут стояло tank*1.15*fuelFactor, і Master (сирі ~97 л при
+    // баку 80) обнулявся ПОВНІСТЮ → заправка не детектувалась узагалі. Тепер значення живе → стрибок видно.
+    flv = capFuel(flv, tank);
     if (flv != null && flv > 0) {
       if (firstFuel == null) firstFuel = flv;
       lastFuel = flv;
