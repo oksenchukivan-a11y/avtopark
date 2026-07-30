@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v79';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v80';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -413,6 +413,27 @@ function gnssJamState(tel){
   if (fixQuality(tel).solid) return 0;
   return s;
 }
+// Скільки часу поспіль трекер НЕ бачить супутників, попри те що авто ЇДЕ (акселерометр).
+// Це найчесніший сигнал «ми не знаємо, де авто»: під РЕБ трекер шле останню відому точку,
+// і один випадковий «чистий» запис (17 супутників) миттєво гасив тривогу — 30.07 Ducato
+// 99% записів мав jam=2 і 0 супутників, їхав, а застосунок показував базу без жодного попередження.
+let blindSince = {}, _blindMoveTs = {};
+try { blindSince = JSON.parse(localStorage.getItem('blindSince') || '{}'); } catch(e) { blindSince = {}; }
+function blindDrivingMs(devId, tel){
+  const moving = tv(tel,'movement.status') === true;
+  const solid  = fixQuality(tel).solid;
+  const now = Date.now();
+  if (moving) _blindMoveTs[devId] = now;
+  // скидаємо, коли (а) зʼявився твердий фікс АБО (б) авто не рухається вже 5 хв
+  // (без пункту «б» тривога висіла б і після того, як авто спокійно припаркувалось під глушінням)
+  const movedRecently = _blindMoveTs[devId] && (now - _blindMoveTs[devId] < 300000);
+  if (solid || !movedRecently) {
+    if (blindSince[devId]) { delete blindSince[devId]; try { localStorage.setItem('blindSince', JSON.stringify(blindSince)); } catch(e){} }
+    return 0;
+  }
+  if (!blindSince[devId]) { blindSince[devId] = now; try { localStorage.setItem('blindSince', JSON.stringify(blindSince)); } catch(e){} }
+  return now - blindSince[devId];
+}
 // відколи авто під глушінням (щоб показувати «глушиться вже Х хв», а не просто статичний прапорець).
 // ГІСТЕРЕЗИС (v74): епізод закривається лише після 3 хв БЕЗПЕРЕРВНО чистого стану. Без цього
 // мерехтіння супутників 3↔5 на межі порогу обнуляло лічильник щоцикла → fast-poll перевзводився
@@ -688,9 +709,14 @@ function renderCards(devs) {
     const gpsLostMsC = lastValidPosTs[d.id] ? (Date.now() - lastValidPosTs[d.id]) : null;
     const gpsLostLong = !fqC.solid && gpsLostMsC != null && gpsLostMsC > GPS_LOST_MS;
     const jam = gnssJamState(tel);
+    const blindMs = blindDrivingMs(d.id, tel);   // їде наосліп: акселерометр рухається, твердого фікса нема
     const jamMs = jamDuration(d.id, jam);
     maybeAutoReboot(d, tel);   // GPS-модуль завис після довгого глушіння → авто-cpureset (див. комент функції)
-    const locHtml = showLoc
+    // НАЙВАЖЛИВІШЕ попередження: авто ЇДЕ (акселерометр), а твердого фікса нема довше 3 хв —
+    // отже точка на карті застаріла і НЕ показує, де авто насправді. Має пріоритет над усім іншим.
+    const locHtml = (blindMs > 180000)
+      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">🚫 Авто ЇДЕ, а GPS глушать вже ${fmtDur(blindMs/1000)} — точка на карті застаріла</div>`
+      : showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs/1000)} — сигнал відсутній</div>`
       : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS ослаблений вже ${fmtDur(jamMs/1000)} (можливе глушіння)</div>`
