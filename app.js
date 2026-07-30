@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v77';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v78';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1095,6 +1095,8 @@ async function periodReport(id, from, to, isStale) {
   let gpsM = 0, prevPt = null, prevTs = null, lastTrackPt = null;
   let firstFuel = null, lastFuel = null, prevFuel = null, prevFuelTs = null;
   let jamSec = 0, prevJamTs = null;   // скільки часу під критичним глушінням (АЗС/РЕБ): GNSS-одометр і трек у цей час СТОЯТЬ
+  const spdLimit = (mdR.speedLimit || 110);   // ліміт цього авто (metadata.speedLimit)
+  const overs = []; let curOver = null;       // епізоди перевищення швидкості
   let prevSoc = null, prevSocTs = null; const charges = [];   // ⚡ сесії зарядки електрички: зростання SoC на стоянці
   const fills = [], drains = [];
   const stops = [];
@@ -1149,6 +1151,21 @@ async function periodReport(id, from, to, isStale) {
     if (spCan != null && spCan >= 0 && spCan < 170) sp = spCan;
     else if (spGps != null && goodFix && spGps < 170) sp = spGps;
     if (sp != null && sp >= 3) spdS.push([ts, sp]);
+
+    // ⚠ ПЕРЕВИЩЕННЯ: епізод = безперервний відрізок, де швидкість трималась вище ліміту авто.
+    // Точки беремо лише з ТВЕРДИХ фіксів — інакше під РЕБ намалюємо «гонки» там, де їх не було.
+    if (sp != null && ts != null) {
+      if (sp > spdLimit) {
+        if (!curOver) curOver = { ts, endTs: ts, maxSpd: sp, pts: [] };
+        curOver.endTs = ts;
+        if (sp > curOver.maxSpd) curOver.maxSpd = sp;
+        if (goodFix && lat != null && lon != null && saneRegion(lat, lon) &&
+            (!curOver.pts.length || haversine(curOver.pts[curOver.pts.length-1], [lat,lon]) > 40)) curOver.pts.push([lat,lon]);
+      } else if (curOver) {
+        if (curOver.endTs - curOver.ts >= 5) overs.push(curOver);   // <5 с — викид датчика, не гонка
+        curOver = null;
+      }
+    }
 
     // трек + GPS-відстань (тільки валідні точки, без телепортів)
     const hdop = m['position.hdop'];
@@ -1231,6 +1248,17 @@ async function periodReport(id, from, to, isStale) {
       prevSoc = soc; prevSocTs = ts;
     }
   }
+  if (curOver && curOver.endTs - curOver.ts >= 5) overs.push(curOver);   // епізод, що тривав до кінця періоду
+  // зливаємо епізоди з паузою <60 с — інакше одна довга «гонка» дробиться на десяток записів у стрічці
+  const speedings = [];
+  for (const e of overs) {
+    const last = speedings[speedings.length-1];
+    if (last && e.ts - last.endTs < 60) {
+      last.endTs = e.endTs; last.maxSpd = Math.max(last.maxSpd, e.maxSpd); last.pts = last.pts.concat(e.pts);
+    } else speedings.push(e);
+  }
+  for (const e of speedings) e.maxSpd = Math.round(e.maxSpd);
+
   closeStop(to); // зупинка, що триває досі
 
   // ділянка від місця стоянки до першого фікса — GPS її не бачив (сон/РЕБ), але авто там реально їхало.
@@ -1320,7 +1348,7 @@ async function periodReport(id, from, to, isStale) {
     c.pct = Math.round(c.pct);
   });
 
-  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec, anchor,
+  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec, anchor, spdLimit, speedings: speedings.slice(0, 100),
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
@@ -1454,7 +1482,21 @@ function focusEvt(lat, lon, label){
   setTimeout(()=>{ if (dMap) dMap.invalidateSize(); }, 350);
 }
 // тап по відрізку «Їхав» → підсвітити САМЕ ЦЕЙ шматок маршруту (фішка з MegaGPS, яку вибрав Іван)
-let _dRep = null, _segHl = null;
+let _dRep = null, _segHl = null, _spdLayers = [];
+// тап по перевищенню в стрічці → показати саме цей відрізок на карті
+function focusSpeed(i){
+  if (!dMap || !_dRep || !_dRep.speedings || !_dRep.speedings[i]) return;
+  const e = _dRep.speedings[i];
+  if (_segHl) { dMap.removeLayer(_segHl); _segHl = null; }
+  scrollToMap();
+  const ln = _spdLayers[i];
+  setTimeout(()=>{
+    if (!dMap) return;
+    dMap.invalidateSize();
+    if (ln) { dMap.fitBounds(ln.getBounds(), { padding:[60,60], maxZoom:15 }); ln.openPopup(); }
+    else if (e.pts && e.pts.length) dMap.setView(e.pts[0], 14);
+  }, 350);
+}
 function focusSeg(si){
   if (!dMap || !_dRep || !_dRep.segments || !_dRep.segments[si]) return;
   const s = _dRep.segments[si];
@@ -1537,6 +1579,9 @@ async function loadPeriod(el) {
       ${(() => { const js = r.jamSec || 0; if (js <= 300 || jammed) return '';
         const noCan = r.odoKm == null;   // авто без CAN-одометра (Ducato): кілометри під глушінням ЗНИКАЮТЬ
         return `<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:0 0 6px">🚫 GPS глушився ${fmtDur(js)}${noCan ? ' — частина пробігу НЕ порахована (авто без CAN-одометра), розхід за день не показуємо' : ''}</div>`; })()}
+      ${(() => { const sp = r.speedings || []; if (!sp.length) return '';
+        const tot = sp.reduce((a,e)=>a+(e.endTs-e.ts),0), mx = Math.max(...sp.map(e=>e.maxSpd));
+        return `<div class="row"><span class="k">🚀 Перевищень ліміту ${r.spdLimit || 110}</span><span class="val" style="color:var(--red)">${sp.length} · разом ${fmtDur(tot)} · до ${mx} км/г</span></div>`; })()}
       ${!md.ev ? `<div class="row"><span class="k">⛽ Залито</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
       <div class="row"><span class="k">🔴 Злито</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>` : ''}
       <div class="row"><span class="k">🅿️ Стояв</span><span class="val">${r.standSec ? fmtDur(r.standSec) : '—'}</span></div>
@@ -1550,7 +1595,7 @@ async function loadPeriod(el) {
     </div>`;
 
   // мапа треку
-  drawTrack(r.track, r.stops, r.anchor);
+  drawTrack(r.track, r.stops, r.anchor, r.speedings);
 
   // ===== СТРІЧКА ДНЯ: зупинки + відрізки руху + заправки/зливи, хронологічно, тап → місце на карті =====
   const items = [];
@@ -1560,6 +1605,7 @@ async function loadPeriod(el) {
   r.fills.forEach(x=> items.push({ ts:x.ts, type:'fill', l:x.l, pt:x.pt }));
   r.drains.forEach(x=> items.push({ ts:x.ts, type:'drain', l:x.l, pt:x.pt }));
   (r.charges||[]).forEach(c=> { if (c.pct >= 2) items.push({ ts:c.ts, type:'charge', pct:c.pct, kwh:c.kwh, uah:c.uah, pt:c.pt }); });
+  (r.speedings||[]).forEach((e,si)=> items.push({ ts:e.ts, type:'speed', dur:e.endTs-e.ts, maxSpd:e.maxSpd, pt:(e.pts&&e.pts[0])||null, si }));
   items.sort((a,b)=> a.ts - b.ts);
 
   const tl = document.getElementById('tlOut');
@@ -1567,33 +1613,37 @@ async function loadPeriod(el) {
     tl.innerHTML = '<div class="muted">подій за період нема</div>';
   } else {
     // вертикальна шкала часу (стиль, який вибрав Іван зі скріншота): час зліва, кружечок-іконка, справа підпис
-    const badge = { drive:['#2ecc71','↗'], stop:['#2e6bd8','P'], fill:['#f39c12','⛽'], drain:['#e74c3c','💧'], charge:['#27ae60','⚡'] };
+    const badge = { drive:['#2ecc71','↗'], stop:['#2e6bd8','P'], fill:['#f39c12','⛽'], drain:['#e74c3c','💧'], charge:['#27ae60','⚡'], speed:['#e74c3c','🚀'] };
     tl.innerHTML = '<div class="tl">' + items.map((it,k)=>{
       const t = fmtTime(it.ts);
       const b = badge[it.type] || ['#7d8b99','•'];
-      const tap = it.type === 'drive'
-        ? ` onclick="focusSeg(${it.si})" style="cursor:pointer"`
+      const tap = it.type === 'drive' ? ` onclick="focusSeg(${it.si})" style="cursor:pointer"`
+        : it.type === 'speed' ? ` onclick="focusSpeed(${it.si})" style="cursor:pointer"`
         : (it.pt ? ` onclick="focusEvt(${it.pt[0]},${it.pt[1]},'${t}')" style="cursor:pointer"` : '');
-      let t1 = '', t2 = it.pt ? '…' : '';
+      let t1 = '', t2 = it.pt ? '…' : '', pre = '';
+      if (it.type === 'speed') { pre = `${fmtDur(it.dur)} понад ${r.spdLimit || 110} км/г`; t2 = pre + (it.pt ? ' · …' : ''); }
       if (it.type === 'stop')   t1 = `№${it.n} стояв ${fmtDur(it.dur)}`;
       if (it.type === 'drive') { t1 = `Їхав ${fmtDur(it.dur)}`; t2 = [it.km!=null?`${it.km} км`:null, it.maxSpd?`до ${it.maxSpd} км/г`:null].filter(Boolean).join(' · '); }
       if (it.type === 'fill')   t1 = `<span style="color:var(--green)">Заправка +${it.l} л</span>`;
       if (it.type === 'drain')  t1 = `<span style="color:var(--red)">Злив? −${it.l} л</span>`;
+      if (it.type === 'speed')  t1 = `<span style="color:var(--red)">🚀 Перевищення до ${it.maxSpd} км/г</span>`;
       if (it.type === 'charge') t1 = `<span style="color:var(--green)">Зарядка +${it.pct}%${it.kwh!=null?` · ≈${it.kwh} кВт·год${it.uah!=null?` · ${it.uah} грн`:''}`:''}</span>`;
-      return `<div class="tli"${tap}><div class="tlt">${t}</div><div class="tlb"><div class="ic" style="background:${b[0]}">${b[1]}</div></div><div class="tlx"><div class="t1">${t1}</div><div class="t2" id="tla_${seq}_${k}">${t2}</div></div></div>`;
+      return `<div class="tli"${tap}><div class="tlt">${t}</div><div class="tlb"><div class="ic" style="background:${b[0]}">${b[1]}</div></div><div class="tlx"><div class="t1">${t1}</div><div class="t2" id="tla_${seq}_${k}"${pre ? ` data-pre="${esc(pre)}"` : ''}>${t2}</div></div></div>`;
     }).join('') + '</div>';
     // адреси подій — асинхронно (кеш + серійна черга, Nominatim не перевантажуємо)
     items.forEach((it,k)=>{
       if (!it.pt) return;
       geocode(it.pt[0], it.pt[1]).then(addr=>{
         const el = document.getElementById('tla_'+seq+'_'+k);
-        if (el) el.textContent = addr || (it.pt[0].toFixed(4)+', '+it.pt[1].toFixed(4));
+        if (!el) return;
+        const pre = el.getAttribute('data-pre');   // «3 хв понад 120 км/г» не затираємо адресою — дописуємо
+        el.textContent = (pre ? pre + ' · ' : '') + (addr || (it.pt[0].toFixed(4)+', '+it.pt[1].toFixed(4)));
       }).catch(()=>{});
     });
   }
 }
 
-function drawTrack(track, stops, anchor) {
+function drawTrack(track, stops, anchor, speedings) {
   const el = document.getElementById('dMap');
   if (!el) return;
   dMap = L.map(el, { zoomControl:true, attributionControl:false });
@@ -1622,6 +1672,14 @@ function drawTrack(track, stops, anchor) {
   // старт / фініш
   L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(dMap).bindPopup(anchor ? 'Перший GPS-фікс періоду' : 'Старт');
   L.circleMarker(track[track.length-1], { radius:6, color:'#e74c3c', fillColor:'#e74c3c', fillOpacity:1 }).addTo(dMap).bindPopup('Кінець');
+  // ⚠ ВІДРІЗКИ ПЕРЕВИЩЕННЯ — червоним поверх синього треку (видно, ДЕ саме водій топив)
+  _spdLayers = [];
+  (speedings||[]).forEach((e,i)=>{
+    if (!e.pts || e.pts.length < 2) return;
+    const ln = L.polyline(e.pts, { color:'#e74c3c', weight:7, opacity:.95 }).addTo(dMap);
+    ln.bindPopup(`🚀 <b>до ${e.maxSpd} км/г</b><br>${fmtTime(e.ts)}–${fmtTime(e.endTs)} · ${fmtDur(e.endTs - e.ts)}`);
+    _spdLayers[i] = ln;
+  });
   // зупинки — пронумеровані
   stops.forEach((s,i)=>{
     if (!s.pt) return;
