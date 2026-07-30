@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v76';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v77';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -934,7 +934,16 @@ async function dayMileage(id, from, to) {
       const t = to || Math.floor(Date.now()/1000);
       const field = await mileageField(id, from, t);
       if (field) {
-        const [first, last] = await Promise.all([ odoAt(id, from, t, false, field), odoAt(id, from, t, true, field) ]);
+        // БАЗОВА ТОЧКА — останній одометр ДО початку періоду (нічний, до 26 год назад).
+        // Без цього доба починалась з ПЕРШОГО повідомлення дня: якщо трекер прокидався вже в дорозі
+        // (сон/офлайн/РЕБ), перший відрізок шляху просто зникав з пробігу. Тепер доба «стикується»
+        // з попередньою: кінець учора = початок сьогодні, жодного кілометра не губиться.
+        const [firstIn, last, before] = await Promise.all([
+          odoAt(id, from, t, false, field),
+          odoAt(id, from, t, true, field),
+          odoAt(id, Math.max(0, from - 26*3600), from, true, field)
+        ]);
+        const first = (before != null && (firstIn == null || before <= firstIn)) ? before : firstIn;
         if (first != null && last != null) {
           const d = Math.round(last - first);
           // межа глюків МАСШТАБУЄТЬСЯ періодом: фіксовані 3000 км обрізали чесний МІСЯЧНИЙ пробіг (>3000 за місяць — норма)
@@ -1064,6 +1073,22 @@ async function periodReport(id, from, to, isStale) {
   }
   msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
   const mdR = ((devCache || []).find(x => x.id === id) || {}).metadata || {};   // калібрування палива — як у fuelCurrent
+
+  // ЯКІР ПОЧАТКУ ПЕРІОДУ: остання ВІДОМА позиція до `from` (до 26 год назад).
+  // Інакше трек починався там, де GPS уперше зловив фікс після ночі/глушіння — часто за десятки км
+  // від реального місця стоянки (Іван: «машина стояла в Сумах, а трек піймав її під Конотопом»).
+  let anchor = null;
+  try {
+    const dA = encodeURIComponent(JSON.stringify({ from: Math.max(0, from - 26*3600), to: from, count: 30, reverse: true,
+      filter: 'position.latitude', fields: 'timestamp,position.latitude,position.longitude,position.valid,position.satellites' }));
+    const resA = await api(`/gw/devices/${id}/messages?data=${dA}`);
+    for (const m of (resA || [])) {
+      const la = m['position.latitude'], lo = m['position.longitude'], sa = m['position.satellites'];
+      if (la != null && lo != null && saneRegion(la, lo) && m['position.valid'] !== false && (sa == null || sa >= 3)) {
+        anchor = [la, lo, m.timestamp]; break;
+      }
+    }
+  } catch(e) { /* якір — приємний бонус, без нього звіт лишається чинним */ }
 
   const tank = tankFor(id);
   const track = [];
@@ -1208,6 +1233,18 @@ async function periodReport(id, from, to, isStale) {
   }
   closeStop(to); // зупинка, що триває досі
 
+  // ділянка від місця стоянки до першого фікса — GPS її не бачив (сон/РЕБ), але авто там реально їхало.
+  // Додаємо ПРЯМУ відстань (це нижня оцінка) — лише коли вона фізично правдоподібна.
+  if (anchor && track.length) {
+    const f0 = track[0];
+    const legKm = haversine([anchor[0], anchor[1]], [f0[0], f0[1]]) / 1000;
+    const dtH = Math.max(0.02, ((f0[2] || from) - anchor[2]) / 3600);
+    if (legKm > 0.2 && legKm / dtH <= 150) gpsM += legKm * 1000;
+    else if (legKm / dtH > 150) anchor = null;                 // неправдоподібно — не малюємо й не рахуємо
+  }
+  // перша зупинка періоду без координат (стояв ще з учора, під РЕБ фікса нема) — беремо місце з якоря
+  if (anchor && stops.length && !stops[0].pt) stops[0].pt = [anchor[0], anchor[1]];
+
   const odoKm = await odoKmP;
   const gpsKm = Math.round(gpsM/1000);
   let filledL = null, drainedL = null, spentL = null;
@@ -1283,7 +1320,7 @@ async function periodReport(id, from, to, isStale) {
     c.pct = Math.round(c.pct);
   });
 
-  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec,
+  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec, anchor,
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
@@ -1513,7 +1550,7 @@ async function loadPeriod(el) {
     </div>`;
 
   // мапа треку
-  drawTrack(r.track, r.stops);
+  drawTrack(r.track, r.stops, r.anchor);
 
   // ===== СТРІЧКА ДНЯ: зупинки + відрізки руху + заправки/зливи, хронологічно, тап → місце на карті =====
   const items = [];
@@ -1556,7 +1593,7 @@ async function loadPeriod(el) {
   }
 }
 
-function drawTrack(track, stops) {
+function drawTrack(track, stops, anchor) {
   const el = document.getElementById('dMap');
   if (!el) return;
   dMap = L.map(el, { zoomControl:true, attributionControl:false });
@@ -1572,8 +1609,18 @@ function drawTrack(track, stops) {
     return;
   }
   const line = L.polyline(track.map(p=>[p[0],p[1]]), { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(dMap);
+  const fitPts = track.map(p=>[p[0],p[1]]);
+  // ЯКІР: де авто стояло на початок періоду + пунктир до першого фікса (ділянка, яку GPS не бачив)
+  if (anchor) {
+    const a = [anchor[0], anchor[1]];
+    L.polyline([a, [track[0][0], track[0][1]]], { color:'#f39c12', weight:3, opacity:.85, dashArray:'9,7' })
+      .addTo(dMap).bindPopup('GPS не писав цю ділянку (сон трекера / РЕБ) — показано напрямок від місця стоянки');
+    L.circleMarker(a, { radius:7, color:'#f39c12', fillColor:'#f39c12', fillOpacity:1 })
+      .addTo(dMap).bindPopup('🅿️ Тут стояла на початок періоду');
+    fitPts.push(a);
+  }
   // старт / фініш
-  L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(dMap).bindPopup('Старт');
+  L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(dMap).bindPopup(anchor ? 'Перший GPS-фікс періоду' : 'Старт');
   L.circleMarker(track[track.length-1], { radius:6, color:'#e74c3c', fillColor:'#e74c3c', fillOpacity:1 }).addTo(dMap).bindPopup('Кінець');
   // зупинки — пронумеровані
   stops.forEach((s,i)=>{
@@ -1581,7 +1628,7 @@ function drawTrack(track, stops) {
     const icon = L.divIcon({ className:'', html:`<div style="background:#f1c40f;color:#000;border:2px solid #fff;border-radius:50%;width:24px;height:24px;line-height:20px;text-align:center;font-weight:700;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.5)">${i+1}</div>`, iconSize:[24,24], iconAnchor:[12,12] });
     L.marker(s.pt, { icon }).addTo(dMap).bindPopup(`Зупинка №${i+1}<br>${fmtDur(s.dur)}<br>${fmtDateTime(s.ts)}`);
   });
-  setTimeout(()=>{ dMap.invalidateSize(); dMap.fitBounds(line.getBounds(), { padding:[30,30] }); }, 100);
+  setTimeout(()=>{ dMap.invalidateSize(); dMap.fitBounds(L.latLngBounds(fitPts), { padding:[30,30] }); }, 100);
 }
 
 function closeDetail(){
