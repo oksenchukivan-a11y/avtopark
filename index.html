@@ -104,6 +104,12 @@
   .row:last-child { border-bottom:none; }
   .row .k { color:var(--dim); }
   .row .val { font-weight:600; }
+  /* підпис швидкості на відрізку перевищення (v79) */
+  .spd-lbl { position:absolute; transform:translate(-50%,-140%); background:rgba(231,76,60,.96); color:#fff;
+    font-size:11px; font-weight:800; line-height:1; padding:3px 6px; border-radius:9px; white-space:nowrap;
+    box-shadow:0 1px 4px rgba(0,0,0,.5); border:1px solid rgba(255,255,255,.35); }
+  .spd-lbl.mx { font-size:13px; padding:4px 8px; background:#c0392b; border-color:#fff; }
+  .spd-lbl::after { content:' км/г'; font-size:9px; font-weight:600; opacity:.85; }
   /* плитки зведення (варіант «великі цифри», вибір v63) */
   .tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:2px 0 10px; }
   .tile { background:var(--card2); border-radius:12px; padding:10px 6px 9px; text-align:center; }

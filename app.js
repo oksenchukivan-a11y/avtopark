@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v78';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v79';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1160,7 +1160,7 @@ async function periodReport(id, from, to, isStale) {
         curOver.endTs = ts;
         if (sp > curOver.maxSpd) curOver.maxSpd = sp;
         if (goodFix && lat != null && lon != null && saneRegion(lat, lon) &&
-            (!curOver.pts.length || haversine(curOver.pts[curOver.pts.length-1], [lat,lon]) > 40)) curOver.pts.push([lat,lon]);
+            (!curOver.pts.length || haversine(curOver.pts[curOver.pts.length-1], [lat,lon]) > 40)) curOver.pts.push([lat, lon, Math.round(sp)]);
       } else if (curOver) {
         if (curOver.endTs - curOver.ts >= 5) overs.push(curOver);   // <5 с — викид датчика, не гонка
         curOver = null;
@@ -1676,9 +1676,24 @@ function drawTrack(track, stops, anchor, speedings) {
   _spdLayers = [];
   (speedings||[]).forEach((e,i)=>{
     if (!e.pts || e.pts.length < 2) return;
-    const ln = L.polyline(e.pts, { color:'#e74c3c', weight:7, opacity:.95 }).addTo(dMap);
+    const ln = L.polyline(e.pts.map(p=>[p[0],p[1]]), { color:'#e74c3c', weight:7, opacity:.95 }).addTo(dMap);
     ln.bindPopup(`🚀 <b>до ${e.maxSpd} км/г</b><br>${fmtTime(e.ts)}–${fmtTime(e.endTs)} · ${fmtDur(e.endTs - e.ts)}`);
     _spdLayers[i] = ln;
+    // ПІДПИСИ ШВИДКОСТІ прямо на лінії: завжди в точці максимуму, а на довгих відрізках — ще дві
+    // проміжні, щоб було видно, з якою швидкістю авто йшло по всій ділянці (а не лише пік).
+    const withSp = e.pts.filter(p => p[2] != null);
+    if (withSp.length) {
+      let mi = 0;
+      for (let k = 1; k < withSp.length; k++) if (withSp[k][2] > withSp[mi][2]) mi = k;
+      const idx = new Set([mi]);
+      if (withSp.length >= 20) { idx.add(Math.floor(withSp.length * 0.25)); idx.add(Math.floor(withSp.length * 0.75)); }
+      for (const k of idx) {
+        const pt = withSp[k];
+        if (!pt) continue;
+        L.marker([pt[0], pt[1]], { icon: L.divIcon({ className:'', iconSize:[0,0],
+          html:`<div class="spd-lbl${k===mi?' mx':''}">${pt[2]}</div>` }), interactive:false, zIndexOffset:900 }).addTo(dMap);
+      }
+    }
   });
   // зупинки — пронумеровані
   stops.forEach((s,i)=>{
