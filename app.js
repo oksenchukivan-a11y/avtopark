@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v80';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v81';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -417,17 +417,34 @@ function gnssJamState(tel){
 // Це найчесніший сигнал «ми не знаємо, де авто»: під РЕБ трекер шле останню відому точку,
 // і один випадковий «чистий» запис (17 супутників) миттєво гасив тривогу — 30.07 Ducato
 // 99% записів мав jam=2 і 0 супутників, їхав, а застосунок показував базу без жодного попередження.
-let blindSince = {}, _blindMoveTs = {};
+let blindSince = {}, _blindMoveTs = {}, posSeen = {};
 try { blindSince = JSON.parse(localStorage.getItem('blindSince') || '{}'); } catch(e) { blindSince = {}; }
+try { posSeen = JSON.parse(localStorage.getItem('posSeen') || '{}'); } catch(e) { posSeen = {}; }
+// Скільки часу координати НЕ змінюються. Ключ до діагностики ЗАВИСАННЯ GNSS-модуля: після довгого
+// глушіння FMB003 починає рапортувати «17 супутників, valid=true», але видає ОДНУ Й ТУ САМУ точку
+// (30.07 Ducato: 120 хв поспіль байт-у-байт ті самі 50.895157/34.808488, поки MegaGPS на тому ж авто
+// показував правду). Справжній фікс ніколи не повторюється до 6-го знака — тому це надійна ознака.
+function posFrozenMs(devId, tel){
+  const la = tv(tel,'position.latitude'), lo = tv(tel,'position.longitude');
+  if (la == null || lo == null) return 0;
+  const now = Date.now(), p = posSeen[devId];
+  if (!p || Math.abs(p.la - la) > 1e-5 || Math.abs(p.lo - lo) > 1e-5) {
+    posSeen[devId] = { la, lo, ts: now };
+    try { localStorage.setItem('posSeen', JSON.stringify(posSeen)); } catch(e){}
+    return 0;
+  }
+  return now - p.ts;
+}
+// «Їде наосліп»: авто рухається (акселерометр), а позиції ми фактично не знаємо — або нема твердого
+// фікса (глушіння), або координати заморожені (завис GNSS-модуль).
 function blindDrivingMs(devId, tel){
   const moving = tv(tel,'movement.status') === true;
   const solid  = fixQuality(tel).solid;
+  const frozen = posFrozenMs(devId, tel) > 120000;   // 2 хв без зміни координат під час руху
   const now = Date.now();
   if (moving) _blindMoveTs[devId] = now;
-  // скидаємо, коли (а) зʼявився твердий фікс АБО (б) авто не рухається вже 5 хв
-  // (без пункту «б» тривога висіла б і після того, як авто спокійно припаркувалось під глушінням)
   const movedRecently = _blindMoveTs[devId] && (now - _blindMoveTs[devId] < 300000);
-  if (solid || !movedRecently) {
+  if ((solid && !frozen) || !movedRecently) {
     if (blindSince[devId]) { delete blindSince[devId]; try { localStorage.setItem('blindSince', JSON.stringify(blindSince)); } catch(e){} }
     return 0;
   }
@@ -465,8 +482,11 @@ const AUTO_REBOOT_AFTER_MS = 6 * 3600000, AUTO_REBOOT_COOLDOWN_MS = 12 * 3600000
 let autoRebootAt = {};
 try { autoRebootAt = JSON.parse(localStorage.getItem('autoRebootAt') || '{}'); } catch(e) { autoRebootAt = {}; }
 function maybeAutoReboot(d, tel){
-  if (gnssJamState(tel) !== 2) return;
-  if (jamDuration(d.id, 2) < AUTO_REBOOT_AFTER_MS) return;
+  // ДВІ причини перезавантажити: (1) критичне глушіння >6 год; (2) авто ЇДЕ, а позиції нема/вона
+  // заморожена >20 хв — типове зависання GNSS-модуля, яке саме не минає (Ducato 30.07).
+  const blind = blindDrivingMs(d.id, tel);
+  const jamLong = gnssJamState(tel) === 2 && jamDuration(d.id, 2) >= AUTO_REBOOT_AFTER_MS;
+  if (!jamLong && blind < 20*60000) return;
   if (Date.now() - (autoRebootAt[d.id] || 0) < AUTO_REBOOT_COOLDOWN_MS) return;
   autoRebootAt[d.id] = Date.now();   // ставимо одразу (проти гонки паралельних refresh)...
   api(`/gw/devices/${d.id}/commands-queue`, 'POST', [{ name:'custom', properties:{ text:'cpureset' } }])
@@ -714,8 +734,12 @@ function renderCards(devs) {
     maybeAutoReboot(d, tel);   // GPS-модуль завис після довгого глушіння → авто-cpureset (див. комент функції)
     // НАЙВАЖЛИВІШЕ попередження: авто ЇДЕ (акселерометр), а твердого фікса нема довше 3 хв —
     // отже точка на карті застаріла і НЕ показує, де авто насправді. Має пріоритет над усім іншим.
+    const frozenMs = posFrozenMs(d.id, tel);
     const locHtml = (blindMs > 180000)
-      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">🚫 Авто ЇДЕ, а GPS глушать вже ${fmtDur(blindMs/1000)} — точка на карті застаріла</div>`
+      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
+          (fqC.solid && frozenMs > 120000)
+            ? `🧊 Завис GPS-модуль: авто ЇДЕ, а точка стоїть ${fmtDur(frozenMs/1000)} — перезавантажую трекер`
+            : `🚫 Авто ЇДЕ, а GPS глушать вже ${fmtDur(blindMs/1000)} — точка на карті застаріла`}</div>`
       : showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 GPS глушать (РЕБ) вже ${fmtDur(jamMs/1000)} — сигнал відсутній</div>`
