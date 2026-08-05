@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v82';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v83';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -532,6 +532,24 @@ async function rebootTracker(id) {
 
 // ===== Іконка машини на карті (з метаданих) =====
 // active = двигун у роботі → зелений світний обідок (колір машини для впізнавання лишається)
+// ===== Малюнки авто для маркерів (безпечно: метадані містять лише КЛЮЧ зі списку, не сам HTML) =====
+// Емодзі на карті дрібне й невиразне; для машин, де хочеться нормальний вигляд, ставимо metadata.iconSvg.
+const VEH_SVG = {
+  // кросовер/позашляховик, білий кузов (Volvo XC40)
+  suv: '<svg viewBox="0 0 64 34" width="30" height="30" aria-hidden="true">'
+     + '<path d="M4.5 25c0-3.4.7-6.4 2.2-8.4l1.8-1.9c1.1-1.1 3-1.9 5-1.9h4.9l6.1-4.9c1.2-1 2.9-1.6 4.6-1.6h8.2c1.9 0 3.7.7 4.8 1.9l4.7 4.6h5.3c3 0 5.8 1.9 6.8 4.7l1.1 3.9c.4 1.6.4 2.7 0 3.6z" fill="#ffffff" stroke="#16202c" stroke-width="1.6" stroke-linejoin="round"/>'
+     + '<path d="M23.5 12.6l4.6-3.9c.7-.6 1.7-1 2.7-1h5.6c1.2 0 2.3.4 3 1.1l4.1 3.8z" fill="#7fb0da"/>'
+     + '<circle cx="17.5" cy="25.5" r="6" fill="#121a24"/><circle cx="46.5" cy="25.5" r="6" fill="#121a24"/>'
+     + '<circle cx="17.5" cy="25.5" r="2.4" fill="#d7dfe8"/><circle cx="46.5" cy="25.5" r="2.4" fill="#d7dfe8"/>'
+     + '</svg>',
+  // фургон (Master/Ducato-подібні)
+  van: '<svg viewBox="0 0 64 34" width="30" height="30" aria-hidden="true">'
+     + '<path d="M5 24V12c0-2 1.6-3.6 3.6-3.6h24c1.5 0 2.9.6 3.9 1.7l8.8 9.3h9.1c2.6 0 4.6 2 4.6 4.6z" fill="#ffffff" stroke="#16202c" stroke-width="1.6" stroke-linejoin="round"/>'
+     + '<path d="M35.5 11.5l7 7.4h-7z" fill="#7fb0da"/><rect x="9" y="11.5" width="9" height="7" rx="1" fill="#7fb0da"/>'
+     + '<circle cx="18" cy="25" r="5.6" fill="#121a24"/><circle cx="47" cy="25" r="5.6" fill="#121a24"/>'
+     + '<circle cx="18" cy="25" r="2.2" fill="#d7dfe8"/><circle cx="47" cy="25" r="2.2" fill="#d7dfe8"/>'
+     + '</svg>'
+};
 function vehIcon(dev, online, active, gpsLost) {
   const m = dev.metadata || {};
   const color = m.color || '#3aa0ff';
@@ -542,8 +560,14 @@ function vehIcon(dev, online, active, gpsLost) {
   const glow = gpsLost ? ',0 0 8px 2px rgba(243,156,18,.85)' : (active ? ',0 0 8px 2px rgba(46,204,113,.85)' : '');
   const badge = gpsLost ? '<div style="position:absolute;top:-4px;right:-4px;font-size:12px">⚠️</div>' : '';
   // color/icon — з метаданих flespi → esc обовʼязково (та сама модель загрози, що для імен: XSS = крадіжка токена)
-  const html = '<div style="position:relative;opacity:'+dim+'"><div style="background:'+esc(color)+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+esc(icon)+'</div>'+badge+'</div>';
-  return L.divIcon({ className:'', html, iconSize:[32,32], iconAnchor:[16,16] });
+  // metadata.iconSvg — КЛЮЧ зі списку VEH_SVG (не HTML!), тому XSS неможливий навіть з чужих метаданих
+  const svg = VEH_SVG[m.iconSvg];
+  const sz = svg ? 40 : 32;
+  const inner = svg
+    ? '<div style="background:#0f1620;border:'+border+';border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 7px rgba(0,0,0,.55)'+glow+'">'+svg+'</div>'
+    : '<div style="background:'+esc(color)+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+esc(icon)+'</div>';
+  const html = '<div style="position:relative;opacity:'+dim+'">'+inner+badge+'</div>';
+  return L.divIcon({ className:'', html, iconSize:[sz,sz], iconAnchor:[sz/2,sz/2] });
 }
 function markerFor(dev, latlon, online, active, gpsLost) {
   const m = dev.metadata || {};
