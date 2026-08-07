@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v83';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v84';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -214,6 +214,11 @@ function fuelCurrent(dev, tel) {
 function fuelLiters(dev, tel) {
   const id = dev && dev.id;
   const live = fuelCurrent(dev, tel);
+  // НА ХОДУ показуємо останнє «спокійне» значення: поплавок у баку плескається, і сира цифра
+  // стрибає на десятки відсотків (Volvo XC40: 8..97% за добу). Довіряємо датчику лише коли авто стоїть.
+  const spNow = tv(tel,'position.speed'), mvNow = tv(tel,'movement.status');
+  const moving = (spNow != null && spNow >= 3) || mvNow === true;
+  if (moving && id && lastFuel[id] != null) return lastFuel[id];
   if (live != null && live > 0) {
     if (id && lastFuel[id] !== live) { lastFuel[id] = live; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} }   // пишемо лише зміну
     return live;
@@ -1186,7 +1191,8 @@ async function periodReport(id, from, to, isStale) {
   const tank = tankFor(id);
   const track = [];
   let gpsM = 0, prevPt = null, prevTs = null, lastTrackPt = null;
-  let firstFuel = null, lastFuel = null, prevFuel = null, prevFuelTs = null;
+  let firstFuel = null, lastFuel = null;
+  const fuelPts = [];   // сирі заміри палива; згладжуються після циклу
   let jamSec = 0, prevJamTs = null;   // скільки часу під критичним глушінням (АЗС/РЕБ): GNSS-одометр і трек у цей час СТОЯТЬ
   const spdLimit = (mdR.speedLimit || 110);   // ліміт цього авто (metadata.speedLimit)
   const overs = []; let curOver = null;       // епізоди перевищення швидкості
@@ -1292,9 +1298,10 @@ async function periodReport(id, from, to, isStale) {
       }
     }
 
-    // паливо в літрах — ТИМ САМИМ калібруванням, що й картка (fuelCurrent): інакше звіт і картка
-    // розходились (некалібрований volume у звіті проти fuelByPct/fuelFactor на картці), а перемикання
-    // джерела volume↔pct на стоянках давало фантомні «зливи» ±4 л
+    // паливо: збираємо СИРІ семпли, а заправки/зливи шукаємо ПІСЛЯ циклу по ЗГЛАДЖЕНІЙ кривій.
+    // Причина: поплавок у баку плескається на ходу. Volvo XC40 віддає сире положення — розкид
+    // 8..97% за добу, і посемпльна детекція нарахувала 661 «заправку» і 939 «зливів» за один день.
+    // Калібрування — те саме, що на картці (fuelCurrent), інакше звіт і картка розходяться.
     const fpct = m['can.fuel.level'];
     let flv = null;
     if (mdR.fuelByPct) {
@@ -1304,23 +1311,8 @@ async function periodReport(id, from, to, isStale) {
       if (flv != null && flv > 0 && mdR.fuelFactor) flv = flv * mdR.fuelFactor;
       if ((flv == null || flv <= 0) && fpct != null && tank) flv = fpct/100*tank * (mdR.fuelFactor || 1);
     }
-    // стеля бака — ТИМ САМИМ хелпером, що й картка (capFuel): помірний перебір м'яко обрізаємо до ємності,
-    // явне сміття (>бак×1.6) відкидаємо. Раніше тут стояло tank*1.15*fuelFactor, і Master (сирі ~97 л при
-    // баку 80) обнулявся ПОВНІСТЮ → заправка не детектувалась узагалі. Тепер значення живе → стрибок видно.
     flv = capFuel(flv, tank);
-    if (flv != null && flv > 0) {
-      if (firstFuel == null) firstFuel = flv;
-      lastFuel = flv;
-      if (prevFuel != null) {
-        const d = flv - prevFuel;
-        // злив: або явно на стоянці (sp<3), або після «сну» трекера >10 хв — датчик шле лише в русі,
-        // і нічна крадіжка інакше з'їдалась у «витрачено» без тривоги (той самий клас, що km<0.3 у Leaf)
-        const slept = (prevFuelTs != null && ts - prevFuelTs > 600);
-        if (d >= FILL_L) fills.push({ ts, l: d, pt: prevPt });                        // pt — де сталась заправка
-        else if (-d >= DRAIN_L && (sp==null || sp<3 || slept)) drains.push({ ts, l: -d, pt: prevPt });
-      }
-      prevFuel = flv; prevFuelTs = ts;
-    }
+    if (flv != null && flv > 0 && ts != null) fuelPts.push({ ts, L: flv, sp: (sp == null ? 0 : sp), pt: prevPt });
 
     // ⚡ ЗАРЯДКА електрички: SoC росте на стоянці. Сесії ближче 30 хв зливаємо в одну (нічна зарядка = одна подія).
     const soc = m['can.vehicle.battery.level'];
@@ -1341,6 +1333,33 @@ async function periodReport(id, from, to, isStale) {
       prevSoc = soc; prevSocTs = ts;
     }
   }
+  // ===== ПАЛИВО: згладжування медіаною по 5-хвилинних вікнах =====
+  // Медіана стійка до плескання (на відміну від середнього, її не тягне пара викидів).
+  // Заправкою/зливом вважаємо ЗМІНУ МІЖ СУСІДНІМИ ВІКНАМИ, яка ще й ТРИМАЄТЬСЯ наступне вікно —
+  // разова «гірка» від нахилу дороги так відсіюється.
+  {
+    const FUEL_WIN = 300;
+    const bmap = new Map();
+    for (const f of fuelPts) {
+      const k = Math.floor(f.ts / FUEL_WIN);
+      if (!bmap.has(k)) bmap.set(k, []);
+      bmap.get(k).push(f);
+    }
+    const median = arr => { const a = arr.slice().sort((x,y)=>x-y); return a[Math.floor(a.length/2)]; };
+    const seq = Array.from(bmap.keys()).sort((a,b)=>a-b).map(k => {
+      const arr = bmap.get(k), mid = arr[Math.floor(arr.length/2)];
+      return { ts: mid.ts, L: median(arr.map(x=>x.L)), pt: mid.pt,
+               stopped: arr.some(x => (x.sp || 0) < 1) };   // чи була машина нерухома в цьому вікні
+    });
+    if (seq.length) { firstFuel = seq[0].L; lastFuel = seq[seq.length-1].L; }
+    for (let i = 1; i < seq.length; i++) {
+      const d = seq[i].L - seq[i-1].L;
+      const holds = (i + 1 >= seq.length) || (Math.abs(seq[i+1].L - seq[i].L) < Math.abs(d) * 0.5);   // зміна втрималась
+      if (d >= FILL_L && holds && seq[i].stopped) fills.push({ ts: seq[i].ts, l: d, pt: seq[i].pt });
+      else if (-d >= DRAIN_L && holds && seq[i].stopped) drains.push({ ts: seq[i].ts, l: -d, pt: seq[i].pt });
+    }
+  }
+
   if (curOver && curOver.endTs - curOver.ts >= 5) overs.push(curOver);   // епізод, що тривав до кінця періоду
   // зливаємо епізоди з паузою <60 с — інакше одна довга «гонка» дробиться на десяток записів у стрічці
   const speedings = [];
