@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v84';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v85';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -181,6 +181,15 @@ function tankFor(x) {
 // Причина: OEM-датчик Renault Master над-читає (~97 л сирих при баку 80) → картка показувала 105 л,
 // а фільтр глюків «>бак» нулив КОЖЕН замір, і заправка не детектувалась. Тепер: явне сміття (>бак×1.6)
 // відкидаємо, помірний перебір м'яко обрізаємо до ємності — і показ правдивий, і детекція заправки жива.
+// КАЛІБРУВАННЯ ПАЛИВА: реальні_літри = показ × fuelFactor + fuelOffset.
+// Один лише множник не рятує, коли датчик СТИСКАЄ шкалу: на зеленому Master він показував
+// 22 л при реальних 16.75 і 100 л при реальних 105 (заправка 88.25 л у 105-літровий бак).
+// Два коефіцієнти рахуються по двох точках однієї заправки — і сходяться на обох кінцях.
+function calFuel(raw, md) {
+  if (raw == null || !(raw > 0)) return null;
+  const L = raw * ((md && md.fuelFactor) || 1) + ((md && md.fuelOffset) || 0);
+  return L > 0 ? L : null;   // від'ємне після зсуву = бак практично порожній / сміття
+}
 function capFuel(liters, tank) {
   if (liters == null || !tank) return liters;
   if (liters > tank * 1.6) return null;   // сенсорне сміття — не віримо
@@ -199,15 +208,15 @@ function fuelCurrent(dev, tel) {
   const tank = tankFor(dev);
   // КАЛІБРУВАННЯ: якщо OEM-літри ненадійні (metadata.fuelByPct) — рахуємо % × реальний бак.
   // fuelFactor застосовується до БУДЬ-ЯКОГО джерела (звірка по чеку заправки: реальні літри ÷ показані)
-  if (md.fuelByPct && pct != null && pct > 0 && tank) return capFuel(Math.round(pct / 100 * tank * (md.fuelFactor || 1)), tank);
+  if (md.fuelByPct && pct != null && pct > 0 && tank) { const L = calFuel(pct / 100 * tank, md); return L == null ? null : capFuel(Math.round(L), tank); }
   // ПРИМІТКА: раніше тут був пріоритет для 'fuel.liters' (серверний плагін flespi msg-expression) —
   // прибрано назавжди: на Kangoo 8440 висів застарілий плагін з часів тестування Audi (формула %×0.7,
   // під 70-літровий бак), і мовчки перебивав правильний клієнтський розрахунок місяцями (показував 25 л
   // замість реальних ~21 л). Калібрування тепер ЛИШЕ клієнтське (metadata.fuelFactor/fuelByPct/tank),
   // без залежності від серверних плагінів, які легко забути відв'язати при зміні авто на пристрої.
   const vol = tv(tel, 'can.fuel.volume');      // реальні літри напряму (Master/Kangoo при русі)
-  if (vol != null && vol > 0) return capFuel(Math.round(vol * (md.fuelFactor || 1)), tank);   // множник калібрування + стеля бака
-  if (pct != null && pct > 0 && tank) return capFuel(Math.round(pct / 100 * tank * (md.fuelFactor || 1)), tank);
+  if (vol != null && vol > 0) { const L = calFuel(vol, md); return L == null ? null : capFuel(Math.round(L), tank); }   // калібрування + стеля бака
+  if (pct != null && pct > 0 && tank) { const L = calFuel(pct / 100 * tank, md); return L == null ? null : capFuel(Math.round(L), tank); }
   return null;
 }
 // Для відображення: поточне значення, інакше останнє відоме (кеш освіжається з історії в renderCards).
@@ -242,7 +251,9 @@ async function lastValidFuel(dev){
       if (res) for (const m of res) {
         const v = m[field];
         if (v != null && v > 0) {
-          const l = capFuel((field === 'can.fuel.level') ? (tank ? Math.round(v/100*tank * (md.fuelFactor || 1)) : null) : Math.round(v * (md.fuelFactor || 1)), tank);
+          const rawL = (field === 'can.fuel.level') ? (tank ? v/100*tank : null) : v;
+          const calL = calFuel(rawL, md);
+          const l = calL == null ? null : capFuel(Math.round(calL), tank);
           if (l != null) { lastFuel[dev.id] = l; lastFuelTs[dev.id] = Date.now(); try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} return l; }
         }
       }
@@ -1305,11 +1316,11 @@ async function periodReport(id, from, to, isStale) {
     const fpct = m['can.fuel.level'];
     let flv = null;
     if (mdR.fuelByPct) {
-      if (fpct != null && fpct > 0 && tank) flv = fpct/100*tank * (mdR.fuelFactor || 1);
+      if (fpct != null && fpct > 0 && tank) flv = calFuel(fpct/100*tank, mdR);
     } else {
-      flv = m['can.fuel.volume'];
-      if (flv != null && flv > 0 && mdR.fuelFactor) flv = flv * mdR.fuelFactor;
-      if ((flv == null || flv <= 0) && fpct != null && tank) flv = fpct/100*tank * (mdR.fuelFactor || 1);
+      const rawVol = m['can.fuel.volume'];
+      flv = (rawVol != null && rawVol > 0) ? calFuel(rawVol, mdR) : null;
+      if (flv == null && fpct != null && fpct > 0 && tank) flv = calFuel(fpct/100*tank, mdR);
     }
     flv = capFuel(flv, tank);
     if (flv != null && flv > 0 && ts != null) fuelPts.push({ ts, L: flv, sp: (sp == null ? 0 : sp), pt: prevPt });
