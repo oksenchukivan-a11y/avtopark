@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Виїжджати чи залишатися — аналіз для сім'ї із Сум</title>
+<style>
+  :root{
+    --ink:#15202b;
+    --ink-2:#3d4a58;
+    --muted:#6b7a8c;
+    --line:#dde4ec;
+    --bg:#ffffff;
+    --soft:#f4f7fb;
+    --navy:#12354f;
+    --accent:#0f6f8c;
+    --warn:#b3541e;
+    --warn-bg:#fdf3ec;
+    --danger:#a32d2d;
+    --danger-bg:#fbeeee;
+    --ok:#1f6b4a;
+    --ok-bg:#eef7f2;
+    --gold:#8a6d1f;
+    --gold-bg:#fdf8e8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,"Noto Sans","Helvetica Neue","Liberation Sans","DejaVu Sans",Arial,sans-serif;
+    color:var(--ink);
+    background:#e9edf2;
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .page{
+    width:210mm;
+    min-height:297mm;
+    margin:0 auto 8mm;
+    background:var(--bg);
+    padding:16mm 15mm 14mm;
+    position:relative;
+    display:flex;
+    flex-direction:column;
+  }
+  .page + .page{border-top:0}
+
+  /* ---------- typography ---------- */
+  h1{font-size:30px;line-height:1.15;margin:0 0 10px;letter-spacing:-.4px}
+  h2{font-size:21px;line-height:1.2;margin:0 0 4px;letter-spacing:-.2px;color:var(--navy)}
+  h3{font-size:15px;margin:0 0 6px;color:var(--navy)}
+  p{margin:0 0 10px}
+  ul,ol{margin:0 0 10px;padding-left:18px}
+  li{margin-bottom:5px}
+  strong{font-weight:650}
+  .lead{font-size:15.5px;color:var(--ink-2)}
+  .small{font-size:12px}
+  .muted{color:var(--muted)}
+  .eyebrow{
+    font-size:11px;letter-spacing:1.6px;text-transform:uppercase;
+    color:var(--accent);font-weight:700;margin-bottom:8px
+  }
+  .rule{height:3px;width:54px;background:var(--accent);margin:10px 0 18px;border-radius:2px}
+  .pagehead{border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:16px}
+  .pagenum{
+    position:absolute;bottom:9mm;right:15mm;font-size:10.5px;color:var(--muted);
+    letter-spacing:.5px
+  }
+  .footmark{
+    position:absolute;bottom:9mm;left:15mm;font-size:10.5px;color:var(--muted)
+  }
+
+  /* ---------- cover ---------- */
+  .cover{
+    background:linear-gradient(160deg,#0d2a3f 0%,#12354f 45%,#194b64 100%);
+    color:#fff;justify-content:space-between
+  }
+  .cover h1{font-size:44px;color:#fff;max-width:15ch}
+  .cover .eyebrow{color:#7fd0e8}
+  .cover .rule{background:#7fd0e8}
+  .cover .sub{font-size:17px;color:#cfe2ec;max-width:46ch;line-height:1.45}
+  .cover-meta{
+    border-top:1px solid rgba(255,255,255,.22);padding-top:14px;
+    display:flex;gap:26px;flex-wrap:wrap;font-size:12.5px;color:#b9d3e0
+  }
+  .cover-meta b{display:block;color:#fff;font-size:13.5px;font-weight:600;margin-bottom:2px}
+  .cover-note{
+    background:rgba(255,255,255,.09);border-left:3px solid #7fd0e8;
+    padding:12px 14px;font-size:12.5px;color:#dbe9f0;border-radius:0 6px 6px 0
+  }
+
+  /* ---------- blocks ---------- */
+  .box{border:1px solid var(--line);border-radius:8px;padding:13px 15px;margin-bottom:12px;background:#fff}
+  .box.soft{background:var(--soft);border-color:#e2e9f1}
+  .box.warn{background:var(--warn-bg);border-color:#f0d6c2}
+  .box.danger{background:var(--danger-bg);border-color:#eecccc}
+  .box.ok{background:var(--ok-bg);border-color:#cde6da}
+  .box.gold{background:var(--gold-bg);border-color:#eadfba}
+  .box h3{margin-bottom:5px}
+  .box.warn h3{color:var(--warn)}
+  .box.danger h3{color:var(--danger)}
+  .box.ok h3{color:var(--ok)}
+  .box.gold h3{color:var(--gold)}
+  .box p:last-child,.box ul:last-child{margin-bottom:0}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}
+
+  .keynum{display:flex;gap:13px;align-items:flex-start;margin-bottom:13px}
+  .keynum .n{
+    flex:0 0 30px;height:30px;border-radius:50%;background:var(--navy);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;
+    margin-top:1px
+  }
+  .keynum .t{flex:1}
+  .keynum .t b{display:block;margin-bottom:2px;font-size:14.5px}
+
+  .stat{border:1px solid var(--line);border-radius:8px;padding:11px 12px;background:#fff}
+  .stat .v{font-size:25px;font-weight:700;color:var(--navy);line-height:1.1}
+  .stat .l{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.35}
+
+  table{width:100%;border-collapse:collapse;font-size:12.3px;margin-bottom:12px}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--navy);color:#fff;font-weight:600;font-size:11.5px;letter-spacing:.2px}
+  tbody tr:nth-child(even){background:#fafcfe}
+  td.num{white-space:nowrap}
+  .tag{
+    display:inline-block;padding:1.5px 7px;border-radius:20px;font-size:10.5px;
+    font-weight:650;letter-spacing:.2px;white-space:nowrap
+  }
+  .t-ok{background:#e0f0e8;color:var(--ok)}
+  .t-mid{background:#fbf1dc;color:var(--gold)}
+  .t-bad{background:#f7dede;color:var(--danger)}
+
+  .card{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+  .card .hd{padding:8px 12px;font-weight:650;font-size:13px;color:#fff;background:var(--navy)}
+  .card .hd.a{background:#0f6f8c}
+  .card .hd.b{background:#6b4f9e}
+  .card .hd.c{background:#3f7a52}
+  .card .hd.d{background:#9e6a2c}
+  .card .hd.e{background:#8a3b3b}
+  .card .bd{padding:10px 12px;font-size:12.4px}
+  .card .bd ul{padding-left:16px;margin-bottom:0}
+  .verdict{font-size:11.5px;padding:7px 12px;background:var(--soft);border-top:1px solid var(--line)}
+
+  .flow{display:flex;flex-direction:column;gap:8px;margin:10px 0 14px}
+  .fnode{
+    border:1.5px solid var(--line);border-radius:8px;padding:9px 12px;font-size:12.5px;background:#fff
+  }
+  .fnode b{color:var(--navy)}
+  .fnode.good{border-color:#9fcfb6;background:var(--ok-bg)}
+  .fnode.bad{border-color:#e3b3b3;background:var(--danger-bg)}
+  .farrow{text-align:center;color:var(--muted);font-size:15px;line-height:1}
+
+  .pm{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .pm .col{border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .pm .col.plus{background:var(--ok-bg);border-color:#cde6da}
+  .pm .col.minus{background:var(--danger-bg);border-color:#eecccc}
+  .pm h4{margin:0 0 6px;font-size:12.5px;letter-spacing:.3px;text-transform:uppercase}
+  .pm .plus h4{color:var(--ok)}
+  .pm .minus h4{color:var(--danger)}
+  .pm ul{margin:0;padding-left:16px;font-size:12.3px}
+
+  .check{list-style:none;padding:0}
+  .check li{
+    padding-left:24px;position:relative;margin-bottom:7px;font-size:12.8px
+  }
+  .check li::before{
+    content:"";position:absolute;left:0;top:2px;width:13px;height:13px;
+    border:1.5px solid var(--accent);border-radius:3px
+  }
+  .qlist{counter-reset:q;list-style:none;padding:0}
+  .qlist li{
+    counter-increment:q;position:relative;padding-left:30px;margin-bottom:11px;font-size:13px
+  }
+  .qlist li::before{
+    content:counter(q);position:absolute;left:0;top:0;width:21px;height:21px;border-radius:50%;
+    background:var(--soft);border:1px solid var(--line);color:var(--navy);font-weight:700;
+    font-size:11.5px;display:flex;align-items:center;justify-content:center
+  }
+  .qlist li b{display:block;margin-bottom:2px}
+
+  .src{font-size:11px;line-height:1.45;color:var(--ink-2)}
+  .src li{margin-bottom:4px}
+  .src a{color:var(--accent);text-decoration:none;word-break:break-all}
+
+  .spacer{flex:1}
+
+  /* densified pages with heavy tables */
+  .dense table{font-size:11.3px;margin-bottom:10px}
+  .dense th,.dense td{padding:5px 7px}
+  .dense th{font-size:11px}
+  .dense .box{padding:10px 12px;margin-bottom:9px}
+  .dense .pm{gap:9px;margin-bottom:9px}
+  .dense .pm ul{font-size:11.5px}
+  .dense li{margin-bottom:3px}
+  .dense p{margin-bottom:8px}
+  .dense h3{font-size:14px;margin-bottom:5px}
+  .dense .pagehead{margin-bottom:12px;padding-bottom:8px}
+  .dense ol{padding-left:17px}
+  .dense.tighter table{font-size:10.9px}
+  .dense.tighter th,.dense.tighter td{padding:4.5px 6px}
+
+  /* ---------- print ---------- */
+  @page{size:A4 portrait;margin:0}
+  @media print{
+    body{background:#fff}
+    .page{margin:0;break-after:page;page-break-after:always;box-shadow:none}
+    .page:last-child{break-after:auto;page-break-after:auto}
+    .box,.card,table,.keynum,.pm{break-inside:avoid;page-break-inside:avoid}
+    .cover{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+  @media screen and (max-width:800px){
+    .page{width:100%;min-height:0;padding:20px 16px}
+    .grid2,.grid3,.pm{grid-template-columns:1fr}
+    .cover h1{font-size:32px}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ 1. COVER ============ -->
+<section class="page cover">
+  <div>
+    <div class="eyebrow">Аналіз рішення для сім'ї · Суми</div>
+    <h1>Виїжджати чи залишатися?</h1>
+    <div class="rule"></div>
+    <p class="sub">Швейцарія (статус S) · Данія (Særlov) · Київ · Ужгород · Суми.<br>
+    Що дає кожен варіант, скільки це коштує, які терміни горять і де ховаються пастки.</p>
+  </div>
+
+  <div>
+    <div class="cover-note">
+      <b>Одна річ, яку варто прочитати навіть якщо більше нічого не читати:</b><br>
+      Швейцарія з 1 листопада 2025 року вирішує за <b>останнім місцем проживання перед виїздом з України</b>.
+      Сумщина дає право на захист. <b>Закарпаття (Ужгород) — ні.</b>
+      Тобто переїзд до сестри в Ужгород може закрити швейцарський варіант назавжди. Київ — не закриває.
+      Деталі на стор. 5.
+    </div>
+    <div class="cover-meta" style="margin-top:18px">
+      <div><b>Дата аналізу</b>12 серпня 2026</div>
+      <div><b>Джерела</b>Офіційні (SEM, Udlændingestyrelsen, Рада ЄС, уряд України) + перевірені ЗМІ</div>
+      <div><b>Статус документа</b>Аналітика, не юридична консультація</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. EXEC SUMMARY ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 1</div>
+    <h2>Головне за 60 секунд</h2>
+  </div>
+
+  <div class="keynum">
+    <div class="n">1</div>
+    <div class="t">
+      <b>Загроза в Сумах — не абстрактна, вона щоденна і вимірювана.</b>
+      Лише з 1 по 11 серпня 2026 року по місту випущено близько 23 керованих авіабомб (6 збито);
+      загинуло 3 людини, поранено 26, серед них дитина. Удари йдуть по житлових кварталах,
+      орієнтовно вранці, вдень і вночі. По області — 213 населених пунктів у зоні обов'язкової евакуації.
+    </div>
+  </div>
+
+  <div class="keynum">
+    <div class="n">2</div>
+    <div class="t">
+      <b>Програма, про яку вам сказали, справді існує — але це дві різні програми.</b>
+      Швейцарія має власний <b>статус S</b> (вона не в ЄС), Данія — власний <b>«особливий закон» (Særlov)</b>
+      (вона має винятки з міграційного права ЄС). Обидві <u>зараз відкриті</u> для жителів Сумської області.
+      Це не «секретна» програма — це відкриті державні механізми, заяви подаються самостійно і безкоштовно.
+    </div>
+  </div>
+
+  <div class="keynum">
+    <div class="n">3</div>
+    <div class="t">
+      <b>Порядок дій важливіший за сам вибір країни.</b>
+      Швейцарія оцінює <i>останнє місце проживання перед виїздом</i>. Сумська область — у переліку небезпечних
+      (захист надають). Закарпатська — у переліку семи «безпечних» (захист не надають автоматично).
+      <b>Ужгород першим кроком = ризик втратити швейцарський варіант.</b> Київ такої проблеми не створює.
+    </div>
+  </div>
+
+  <div class="keynum">
+    <div class="n">4</div>
+    <div class="t">
+      <b>Вікно у Швейцарії може зачинятися просто зараз.</b>
+      19 червня 2026 року Федеральна рада почала консультації щодо майбутнього статусу S і має ухвалити
+      рішення <b>до кінця літа 2026</b> — тобто в найближчі тижні. Серед розглянутого — подальше звуження
+      кола отримувачів. Чинні правила гарантовано діють до 4 березня 2027 року.
+    </div>
+  </div>
+
+  <div class="keynum">
+    <div class="n">5</div>
+    <div class="t">
+      <b>Данія — стабільніша, але «бідніша на руки» і вже почала закриватися.</b>
+      Регіонального фільтра немає, дозволи продовжують до 17 березня 2027 року. Але з 25 червня 2026 року
+      внесено законопроєкт, який позбавляє захисту українських чоловіків 23–60 років без документів про
+      відстрочку. Для дружини й дітей це не перешкода.
+    </div>
+  </div>
+
+  <div class="box gold">
+    <h3>Рекомендація одним реченням</h3>
+    <p>Якщо головний критерій — <b>безпека дітей плюс фінансова стійкість</b>, то найсильніший варіант зараз —
+    <b>Швейцарія, з виїздом безпосередньо із Сум і рішенням у найближчі 2–4 тижні</b>;
+    якщо головний критерій — <b>не розривати сім'ю</b>, то <b>Київ до батька</b>, і тоді швейцарський варіант
+    залишається в резерві, а Ужгород варто розглядати останнім (найдорожча оренда в країні + він «спалює» опцію Швейцарії).</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">2</div>
+</section>
+
+<!-- ============ 3. INPUTS ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 2</div>
+    <h2>Рамка рішення: що ми точно знаємо</h2>
+  </div>
+
+  <div class="grid3" style="margin-bottom:14px">
+    <div class="stat"><div class="v">23</div><div class="l">КАБи по Сумах за перші 11 днів серпня 2026 (6 збито)</div></div>
+    <div class="stat"><div class="v">3 / 26</div><div class="l">загиблих / поранених у місті за той самий період</div></div>
+    <div class="stat"><div class="v">213</div><div class="l">населених пунктів Сумщини в зоні обов'язкової евакуації</div></div>
+  </div>
+
+  <h3>Хто фізично може виїхати</h3>
+  <ul>
+    <li><b>Дружина і діти — можуть.</b> Під час воєнного стану для виїзду дитини з одним із батьків
+      <b>нотаріальна згода другого з батьків не потрібна</b>. Потрібні: закордонний паспорт дитини
+      (біометричний), свідоцтво про народження, паспорт матері.</li>
+    <li><b>Ви (чоловік 18–60) — ні</b>, за загальним правилом воєнного стану. Отже будь-який закордонний
+      варіант означає <b>розлуку</b>, і саме це, а не гроші, є головною ціною рішення.</li>
+    <li>Наслідок: <b>відвідувати сім'ю зможе лише вона вас</b>, а не навпаки. У Швейцарії кількість днів
+      перебування в Україні обмежена (за наявними даними — до 15 днів за пів року; це критично важливо
+      перевірити безпосередньо в SEM перед рішенням).</li>
+  </ul>
+
+  <div class="box warn">
+    <h3>Чого немає в цьому аналізі — і що може змінити висновок</h3>
+    <p>Ці параметри я не знаю, а вони сильно впливають на відповідь. Пройдіться по них перед рішенням:</p>
+    <div class="grid2">
+      <ul style="margin-bottom:0">
+        <li>Вік дітей (дошкільня / школа / випускний клас)</li>
+        <li>Чи є в дружини професія з попитом за кордоном, чи є дистанційна робота</li>
+        <li>Рівень англійської / німецької в родині</li>
+        <li>Здоров'я: хронічні хвороби, інвалідність, вагітність</li>
+      </ul>
+      <ul style="margin-bottom:0">
+        <li>Чи є у вас бронювання / відстрочка, чи мобілізація ймовірна найближчим часом</li>
+        <li>Власне житло в Сумах: іпотека, чи є що втрачати, чи є куди повертатися</li>
+        <li>Фінансова подушка на 2–3 місяці переїзду</li>
+        <li>Чи готові батько в Києві / сестра в Ужгороді приймати надовго (рік+), а не на місяць</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="box soft">
+    <h3>Одна методична заувага</h3>
+    <p>Це рішення часто обговорюють як «поїхати чи не поїхати». Насправді воно розкладається на три
+    незалежні питання, і плутати їх — головна причина сварок у сім'ях:
+    <b>(1)</b> наскільки терміново треба вивезти дітей із зони ударів;
+    <b>(2)</b> куди саме — у межах України чи за кордон;
+    <b>(3)</b> на який строк і за яких умов повертатися.
+    Далі в документі вони розділені.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">3</div>
+</section>
+
+<!-- ============ 4. MAP OF OPTIONS ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 3</div>
+    <h2>Карта варіантів: п'ять реальних сценаріїв</h2>
+  </div>
+
+  <div class="grid2" style="gap:11px">
+    <div class="card">
+      <div class="hd a">A · Швейцарія — статус S</div>
+      <div class="bd">
+        <ul>
+          <li>Житло, медстрахування і базові потреби покриває кантон</li>
+          <li>Сумщина зараз дає право на захист</li>
+          <li>Право на роботу з першого дня</li>
+          <li>Найвищий рівень підтримки з усіх варіантів</li>
+        </ul>
+      </div>
+      <div class="verdict"><b>Вердикт:</b> найсильніший фінансово й за безпекою; вікно може звузитись уже цього літа.</div>
+    </div>
+
+    <div class="card">
+      <div class="hd b">B · Данія — Særlov</div>
+      <div class="bd">
+        <ul>
+          <li>Швидка процедура (тижні), робота з першого дня</li>
+          <li>Муніципалітет зобов'язаний знайти житло</li>
+          <li>Немає регіонального фільтра за областями</li>
+          <li>Виплати оподатковувані, оренда дорога</li>
+        </ul>
+      </div>
+      <div class="verdict"><b>Вердикт:</b> стабільний «другий номер»; єдиний варіант, що переживе переїзд в Ужгород.</div>
+    </div>
+
+    <div class="card">
+      <div class="hd c">C · Київ — до батька</div>
+      <div class="bd">
+        <ul>
+          <li>Сім'я не розривається, ви можете бачитись</li>
+          <li>Виплати ВПО: 2 000 ₴ дорослий / 3 000 ₴ дитина</li>
+          <li>Оренда 1-кімнатної ≈ 17 000 ₴ (якщо окремо)</li>
+          <li>Київ теж під ударами, але ППО значно сильніша</li>
+        </ul>
+      </div>
+      <div class="verdict"><b>Вердикт:</b> найдешевший компроміс, зберігає всі опції відкритими. Не закриває Швейцарію.</div>
+    </div>
+
+    <div class="card">
+      <div class="hd d">D · Ужгород — до сестри</div>
+      <div class="bd">
+        <ul>
+          <li>Найбезпечніше місце в Україні</li>
+          <li>Але: <b>найдорожча оренда в країні</b> — медіана 1-кімнатної 22 500 ₴</li>
+          <li>Дорожче за Київ (+18,4% за рік)</li>
+          <li>Ризик: закриває швейцарський варіант</li>
+        </ul>
+      </div>
+      <div class="verdict"><b>Вердикт:</b> безпечно, але найдорожче в Україні і стратегічно найгірший перший крок.</div>
+    </div>
+
+    <div class="card" style="grid-column:1 / -1">
+      <div class="hd e">E · Залишитись у Сумах</div>
+      <div class="bd">
+        <p style="margin-bottom:6px">Це теж рішення, а не його відсутність. Реалістично воно означає:
+        щоденний ризик КАБів (підліт 30–60 секунд, укриття часто не рятує від прямого влучання в житловий будинок),
+        навчання дітей онлайн або в укриттях, накопичення стресу.
+        Раціональні підстави для нього є лише тоді, коли: є важкохвора людина, яку не можна перевозити;
+        є бізнес/робота, які годують родину і не переносяться; або переїзд руйнує дохід більше, ніж дає безпеки.</p>
+        <p style="margin-bottom:0"><b>Проміжний варіант, який часто ігнорують:</b> вивезти <u>дітей</u> до родичів
+        на 2–3 місяці (літо/початок навчального року), поки дорослі спокійно готують основне рішення.
+        Це знімає гостроту й не спалює жодну опцію.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="box soft" style="margin-top:auto">
+    <p class="small" style="margin-bottom:0"><b>Також розглянуто далі (стор. 13):</b> Німеччина, Польща, Норвегія,
+    Нідерланди, Ірландія, Чехія — і чому у 2026 році вони вже не такі привабливі, як у 2022–2023.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">4</div>
+</section>
+
+<!-- ============ 5. THE TRAP ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 4 · Найважливіша сторінка</div>
+    <h2>Пастка «спочатку Ужгород, потім подивимось»</h2>
+  </div>
+
+  <p class="lead">Найпоширеніша логіка — «переїдемо поки до сестри, а там побачимо». З погляду швейцарської
+  програми ця логіка коштує дорого: вона може незворотно закрити доступ до найкращого фінансового варіанту.</p>
+
+  <div class="box danger">
+    <h3>Що саме змінилось у Швейцарії</h3>
+    <p>З <b>1 листопада 2025 року</b> Швейцарія скасувала єдину презумпцію для всієї України. Тепер статус S
+    надають лише тим, чиє <b>останнє місце проживання перед виїздом з України</b> було в окупованих або
+    прифронтових регіонах. Сім областей визнано достатньо безпечними для повернення:</p>
+    <p style="margin:8px 0 0"><b>Волинська · Рівненська · Львівська · Тернопільська · Закарпатська ·
+    Івано-Франківська · Чернівецька.</b></p>
+    <p style="margin-top:8px;margin-bottom:0">Заявникам звідти статус автоматично не дають — треба доводити
+    індивідуальну загрозу. Станом на кінець лютого 2026 року нове правило вже зачепило 573 особи.
+    <b>Сумська область до цього списку не входить</b> — отже, наразі захист надають.</p>
+  </div>
+
+  <h3>Як це виглядає у вашому випадку</h3>
+  <div class="flow">
+    <div class="fnode good"><b>Сценарій 1.</b> Дружина з дітьми виїжджає <b>із Сум</b> (реєстрація й фактичне
+      проживання — Сумська область) → подає заяву у Швейцарії → останнє місце проживання = Сумщина →
+      <b>підстава для статусу S є</b>.</div>
+    <div class="farrow">▼</div>
+    <div class="fnode bad"><b>Сценарій 2.</b> Дружина спершу переїжджає <b>в Ужгород</b>, оформлює довідку ВПО
+      за закарпатською адресою, живе там кілька місяців → потім подає заяву у Швейцарії → останнє місце
+      проживання = Закарпаття (і це підтверджено власними документами ВПО) →
+      <b>висока ймовірність відмови</b>.</div>
+    <div class="farrow">▼</div>
+    <div class="fnode"><b>Сценарій 3.</b> Дружина переїжджає <b>в Київ</b> → Київ і Київська область
+      <u>не входять</u> до списку семи безпечних регіонів → швейцарський варіант формально залишається
+      відкритим. <span class="muted">(Застереження: у публічних обговореннях звучало, що зона навколо Києва —
+      найімовірніший кандидат на розширення списку. Це не гарантія на майбутнє.)</span></div>
+  </div>
+
+  <div class="box warn">
+    <h3>Практичний висновок</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Якщо Швейцарія взагалі розглядається — не робіть Ужгород першим кроком.</b> Або їхати одразу,
+      або перечікувати в Києві.</li>
+      <li>Данія такого фільтра не має. Тому, якщо родина вже переїхала в Ужгород, <b>Данія залишається
+      доступною</b>, а Швейцарія — вже під питанням. Це і є справжня причина, чому порядок кроків важливіший
+      за сам вибір країни.</li>
+      <li>Перед будь-яким рішенням варто написати запит у SEM або в Швейцарську раду у справах біженців
+      (Schweizerische Flüchtlingshilfe) і отримати відповідь письмово — це безкоштовно.</li>
+    </ul>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">5</div>
+</section>
+
+<!-- ============ 6. SWITZERLAND MECHANICS ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 5 · Варіант A</div>
+    <h2>Швейцарія: як це працює насправді</h2>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:32%">Параметр</th><th>Як є станом на серпень 2026</th></tr></thead>
+    <tbody>
+      <tr><td><b>Правова основа</b></td><td>Статус S — власний швейцарський механізм захисту (Швейцарія не в ЄС і не застосовує Директиву ЄС про тимчасовий захист)</td></tr>
+      <tr><td><b>Хто має право</b></td><td>Громадяни України та члени їхніх сімей, які проживали в Україні до 24 лютого 2022 року, <b>і чиє останнє місце проживання — не в семи «безпечних» областях</b></td></tr>
+      <tr><td><b>Строк дії</b></td><td>Федеральна рада 8 жовтня 2025 року вирішила <b>не скасовувати статус S до 4 березня 2027 року</b></td></tr>
+      <tr><td><b>Як подати</b></td><td>В'їзд без візи (біометричний паспорт), реєстрація онлайн через <b>RegisterMe</b> або особисто у федеральному центрі для біженців (FAC); далі розподіл у кантон</td></tr>
+      <tr><td><b>Житло</b></td><td>Колективний центр, приймаюча родина або виділена квартира — залежно від кантону. Приймаючі родини отримують компенсацію ≈ <b>195 CHF/особу на місяць</b> (від 3 місяців проживання)</td></tr>
+      <tr><td><b>Гроші</b></td><td>«Азильна» соціальна допомога від кантону — приблизно на 30% нижча за звичайну. Приклад Цюриха 2026: базові потреби <b>743 CHF/міс</b> на одну особу (для місцевих — 1 061 CHF). Ставка на кожного наступного члена сім'ї нижча</td></tr>
+      <tr><td><b>Медицина</b></td><td>Обов'язкове страхування оформлюють, премії субсидують; первинна допомога доступна</td></tr>
+      <tr><td><b>Робота</b></td><td>Дозволена (наймана і самозайнятість) з повідомленням органу. Політика 2026 року — прямий тиск на працевлаштування: кожен зароблений франк зменшує допомогу</td></tr>
+      <tr><td><b>Діти</b></td><td>Школа обов'язкова і безкоштовна, доступ з перших тижнів</td></tr>
+      <tr><td><b>Поїздки в Україну</b></td><td>Обмежені. За наявними даними — до <b>15 днів за пів року</b> (раніше було 15 днів на квартал). Перевищення = підстава для скасування статусу. <span class="muted">Обов'язково перевірити в SEM.</span></td></tr>
+      <tr><td><b>Масштаб</b></td><td>≈ 68 000 українців зі статусом S у країні; найбільше — кантони Цюрих (≈12 500) і Берн (≈6 150)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box soft">
+    <h3>Що це означає в перекладі на побут</h3>
+    <p style="margin-bottom:0">Швейцарія не дає «великих грошей на руки» — вона <b>знімає з вас найдорожчі
+    статті витрат</b>: оренду і медицину. Готівкою залишається сума на їжу, транспорт і побут. Саме тому
+    порівнювати «743 CHF проти 15 874 DKK» напряму неправильно — у Данії з виплати треба самому платити оренду,
+    у Швейцарії переважно ні. Реальний показник — <b>скільки залишається після житла і страховки</b>.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">6</div>
+</section>
+
+<!-- ============ 7. SWITZERLAND RISKS ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 5 · Варіант A</div>
+    <h2>Швейцарія: сильні сторони і ризики</h2>
+  </div>
+
+  <div class="pm">
+    <div class="col plus">
+      <h4>За</h4>
+      <ul>
+        <li>Найвищий фактичний рівень підтримки серед усіх розглянутих варіантів</li>
+        <li>Житло і медичне страхування закриває держава — це головні витрати</li>
+        <li>Сумська область <b>зараз</b> дає підставу для захисту</li>
+        <li>Висока безпека, якісна школа, сильна система охорони здоров'я</li>
+        <li>Робота дозволена з першого дня, зарплати найвищі в Європі</li>
+        <li>Статус гарантовано діє щонайменше до 4 березня 2027 року</li>
+      </ul>
+    </div>
+    <div class="col minus">
+      <h4>Проти</h4>
+      <ul>
+        <li>Розлука з вами практично повна: ви приїхати не можете, її поїздки обмежені</li>
+        <li>Правила можуть звузити вже цього літа — рішення Федеральної ради очікується <b>до кінця літа 2026</b></li>
+        <li>Дуже дорога країна: без допомоги самостійно прожити важко</li>
+        <li>Мовний бар'єр (німецька/французька), інтеграція повільна</li>
+        <li>З березня 2027 кантони самі вирішуватимуть рівень допомоги для тих, хто прожив 5+ років — можливе зниження</li>
+        <li>Розподіл у кантон — не за вашим вибором; колективний центр на старті цілком імовірний</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="box danger">
+    <h3>Ризик №1: рішення, яке ухвалюють просто зараз</h3>
+    <p>19 червня 2026 року Федеральна рада ознайомилася з концепцією «Майбутнє статусу S» і запустила
+    консультації з зацікавленими сторонами. <b>Рішення обіцяли ухвалити до кінця літа 2026 року.</b>
+    Серед публічно обговорюваних варіантів — виключення зі статусу S українських чоловіків призовного віку
+    та подальше уточнення переліку регіонів.</p>
+    <p style="margin-bottom:0"><b>Що це означає практично:</b> правила, за якими Сумщина дає право на захист,
+    діють сьогодні, але це рухома мішень. Якщо цей варіант серйозно розглядається — рішення потрібно ухвалювати
+    в горизонті тижнів, а не місяців. Водночас: ті, хто <u>вже отримав</u> статус S, під нові обмеження не
+    підпадають — статус, отриманий вчасно, захищений.</p>
+  </div>
+
+  <div class="box gold">
+    <h3>Ризик №2: «а що після 2027-го»</h3>
+    <p style="margin-bottom:0">Це загальна проблема всіх програм тимчасового захисту, а не тільки швейцарської.
+    ЄС у липні 2026 року погодив продовження тимчасового захисту до <b>4 березня 2028 року</b> і одночасно
+    ухвалив рекомендації щодо «стратегії виходу»: країнам радять переводити українців на національні дозволи
+    на проживання (робота, навчання, сім'я) або готувати добровільне повернення.
+    Тобто горизонт планування — приблизно <b>2 роки з високою впевненістю</b>, далі залежить від війни і від
+    того, чи встигне людина стати на ноги (робота + мова = шанс перейти на звичайний дозвіл).</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">7</div>
+</section>
+
+<!-- ============ 8. DENMARK ============ -->
+<section class="page dense">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 6 · Варіант B</div>
+    <h2>Данія: як це працює насправді</h2>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:32%">Параметр</th><th>Як є станом на серпень 2026</th></tr></thead>
+    <tbody>
+      <tr><td><b>Правова основа</b></td><td>«Особливий закон» (Særloven) — Lov om midlertidig opholdstilladelse til personer, der er fordrevet fra Ukraine. Данія має винятки з міграційного права ЄС, тому діє за власним законом</td></tr>
+      <tr><td><b>Хто має право</b></td><td>Громадяни України та визнані в Україні біженці, які перебувають у Данії. <b>Регіонального фільтра за областями немає</b></td></tr>
+      <tr><td><b>Строк дії</b></td><td>Дозволи продовжують <b>до 17 березня 2027 року</b>; продовження — автоматичне, самому подавати не треба</td></tr>
+      <tr><td><b>Як подати</b></td><td>Треба фізично бути в Данії. Заява онлайн на nyidanmark.dk або особисто у відділку поліції чи центрі <b>Sandholm</b>; біометрія; рішення зазвичай за кілька тижнів</td></tr>
+      <tr><td><b>Житло</b></td><td>До рішення — центр розміщення. Після — вас закріплюють за <b>муніципалітетом (kommune)</b>, який зобов'язаний забезпечити житло, допомогти з роботою і виплатами</td></tr>
+      <tr><td><b>Гроші</b></td><td>З 1 липня 2025 українців перевели в загальну систему <b>kontanthjælp</b>. 2026: базова ставка 7 529 kr/міс + надбавки; <b>одинокий батько/мати 30+ ≈ 15 874 kr/міс до податку</b> (≈ 12 900–13 300 kr на руки). Плюс дитячі виплати. <b>З цієї суми оплачується оренда</b> (частково компенсує boligstøtte)</td></tr>
+      <tr><td><b>Робота</b></td><td>Дозволена з першого дня. Можна заробляти до 5 400 kr/міс без вирахування з допомоги</td></tr>
+      <tr><td><b>Діти</b></td><td>Безкоштовна школа, медицина; садочки платні, але з дотаціями</td></tr>
+      <tr><td><b>Масштаб</b></td><td>Понад 53 000 українців офіційно зареєстровано в Данії</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box warn">
+    <h3>Три зміни 2026 року, які треба знати заздалегідь</h3>
+    <ul style="margin-bottom:0">
+      <li><b>25 червня 2026</b> — внесено законопроєкт: чоловіки <b>23–60 років</b> отримають дозвіл лише за
+      документальним підтвердженням звільнення від військової служби; для хлопців до 23 років дозвіл — до
+      досягнення 23. Заяв, поданих <u>до</u> 25.06.2026, це не стосується. <b>Жінок і дітей не стосується.</b></li>
+      <li><b>Реформа kontanthjælp</b> (з 2026) вирівнює умови українців з іншими отримувачами допомоги;
+      муніципалітетам дали перехідний період до 1 жовтня 2026 року.</li>
+      <li>Обговорюється <b>вимога мінімум 120 годин роботи на місяць</b> для продовження дозволу за Særlov —
+      статус на етапі законопроєкту, але тренд однозначний: допомога прив'язується до зайнятості.</li>
+    </ul>
+  </div>
+
+  <div class="pm">
+    <div class="col plus">
+      <h4>За</h4>
+      <ul>
+        <li>Немає регіонального фільтра — <b>працює навіть після переїзду в Ужгород</b></li>
+        <li>Швидка й проста процедура, рішення за тижні</li>
+        <li>Муніципалітет юридично зобов'язаний дати житло</li>
+        <li>Дуже сильна система для дітей; висока безпека</li>
+        <li>Ринок праці відкритий з першого дня</li>
+      </ul>
+    </div>
+    <div class="col minus">
+      <h4>Проти</h4>
+      <ul>
+        <li>Виплати оподатковувані; оренда й побут дуже дорогі</li>
+        <li>«На руки» після житла — менше, ніж у Швейцарії</li>
+        <li>Правила щорічно жорсткішають, вектор — до вимог зайнятості</li>
+        <li>Складна мова, закритий соціум, довга інтеграція</li>
+        <li>Розподіл у муніципалітет — не за вашим вибором (може бути глуха провінція)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">8</div>
+</section>
+
+<!-- ============ 9. CH vs DK ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 7</div>
+    <h2>Швейцарія проти Данії: лоб у лоб</h2>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:26%">Критерій</th><th style="width:37%">🇨🇭 Швейцарія (статус S)</th><th style="width:37%">🇩🇰 Данія (Særlov)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><b>Доступність для жительки Сум</b></td>
+        <td><span class="tag t-ok">Відкрито</span> Сумщина не в списку безпечних регіонів</td>
+        <td><span class="tag t-ok">Відкрито</span> регіонального фільтра взагалі немає</td></tr>
+      <tr><td><b>Чи переживе переїзд в Ужгород</b></td>
+        <td><span class="tag t-bad">Ні</span> останнє місце проживання стане «безпечним»</td>
+        <td><span class="tag t-ok">Так</span> область значення не має</td></tr>
+      <tr><td><b>Гарантований строк</b></td>
+        <td>до 4 березня 2027 (рішення про подальше — цього літа)</td>
+        <td>до 17 березня 2027, продовження автоматичне</td></tr>
+      <tr><td><b>Житло</b></td>
+        <td><span class="tag t-ok">Надають</span> центр / приймаюча родина / квартира, оплата переважно з боку кантону</td>
+        <td><span class="tag t-mid">Надають</span> муніципалітет зобов'язаний, але оренду платите з виплати</td></tr>
+      <tr><td><b>Гроші «на руки» після житла</b></td>
+        <td>Вище: базові потреби ≈ 743 CHF/міс на першу особу (Цюрих, 2026) + оплачені житло і страховка</td>
+        <td>Нижче: з ≈ 12 900–13 300 kr на руки треба покрити оренду</td></tr>
+      <tr><td><b>Медицина</b></td>
+        <td>Страховку оформлюють, премії субсидують</td>
+        <td>Безкоштовна державна система, без страхових внесків</td></tr>
+      <tr><td><b>Швидкість</b></td>
+        <td>Реєстрація одразу, розподіл у кантон, рішення відносно швидко</td>
+        <td><span class="tag t-ok">Швидше</span> рішення зазвичай за кілька тижнів</td></tr>
+      <tr><td><b>Поїздки в Україну</b></td>
+        <td><span class="tag t-bad">Жорстко</span> ліміт днів, перевищення = ризик втратити статус</td>
+        <td>Менш жорстко, але правила треба уточнити в Udlændingestyrelsen</td></tr>
+      <tr><td><b>Перспектива після 2027–2028</b></td>
+        <td>Кантони отримають право самі визначати рівень допомоги; перехід на звичайний дозвіл через роботу</td>
+        <td>Курс на прив'язку до зайнятості (обговорюють 120 год/міс)</td></tr>
+      <tr><td><b>Головний ризик</b></td>
+        <td>Правила змінюються <b>саме зараз</b></td>
+        <td>Поступове зниження рівня підтримки</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box ok">
+    <h3>Як обирати між ними</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Якщо рішення ухвалюється швидко і виїзд — прямо із Сум:</b> Швейцарія дає більше ресурсу
+      на старті (житло + страховка + готівка) і кращу «подушку» для матері з дітьми без мови й роботи.</li>
+      <li><b>Якщо дружина готова і хоче працювати з першого місяця</b>, а сім'я налаштована на довгу
+      інтеграцію: Данія простіша, передбачуваніша і швидша, а її бюрократія — дружніша.</li>
+      <li><b>Якщо переїзд у межах України вже стався (особливо в Закарпаття):</b> реально залишається Данія.</li>
+    </ul>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">9</div>
+</section>
+
+<!-- ============ 10. INSIDE UKRAINE ============ -->
+<section class="page dense">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 8</div>
+    <h2>Варіанти всередині України: Київ, Ужгород, Суми</h2>
+  </div>
+
+  <h3>Що держава дає внутрішньо переміщеним особам у 2026 році</h3>
+  <table>
+    <thead><tr><th style="width:34%">Програма</th><th>Розмір і умови</th></tr></thead>
+    <tbody>
+      <tr><td><b>Допомога на проживання ВПО</b></td><td><b>2 000 ₴/міс</b> на дорослого, <b>3 000 ₴/міс</b> на дитину та особу з інвалідністю. Призначають на 6 місяців з перевіркою доходів; граничний дохід — <b>10 380 ₴</b> на особу</td></tr>
+      <tr><td><b>«Прихисток»</b></td><td>Власнику житла, який безоплатно приймає ВПО, компенсують <b>450 ₴/міс за кожну особу</b>. Актуально, якщо батько в Києві офіційно оформить прихисток</td></tr>
+      <tr><td><b>Субсидія на оренду</b></td><td>Для ВПО, які витрачають на оренду понад 20% доходу і не отримують іншої житлової допомоги</td></tr>
+      <tr><td><b>«єВідновлення»</b></td><td>Компенсація за пошкоджене/зруйноване житло після 24.02.2022 (ремонт або житловий сертифікат). Актуально лише якщо ваше житло постраждає</td></tr>
+      <tr><td><b>Пільгові кредити</b></td><td>Програми Держмолодьжитла за підтримки KfW та ін. під ≈3% річних для окремих категорій ВПО</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger">
+    <h3>Важливо: виплати ВПО і закордон не поєднуються</h3>
+    <p style="margin-bottom:0">З липня 2026 року Мінфін щомісяця перевіряє, хто з ВПО перебуває за кордоном.
+    Перебування за межами України понад встановлений строк (за різними повідомленнями — від 30 до 90 днів
+    поспіль) є підставою переглянути статус ВПО і <b>припинити виплати</b>. Також діють вибіркові перевірки
+    фактичного проживання за адресою. Тобто розраховувати одночасно на українську допомогу ВПО і на
+    європейську не варто — планувати треба щось одне.</p>
+  </div>
+
+  <h3>Порівняння трьох міст</h3>
+  <table>
+    <thead><tr><th style="width:22%">Критерій</th><th>Київ (у батька)</th><th>Ужгород (у сестри)</th><th>Суми (залишитись)</th></tr></thead>
+    <tbody>
+      <tr><td><b>Безпека</b></td><td>Регулярні атаки, але найпотужніша ППО в країні</td><td><span class="tag t-ok">Найвища</span> далеко від фронту</td><td><span class="tag t-bad">Критична</span> щоденні КАБи, підліт секунди</td></tr>
+      <tr><td><b>Оренда 1-к. (медіана)</b></td><td>≈ 17 000 ₴/міс</td><td><span class="tag t-bad">≈ 22 500 ₴/міс</span> найдорожче в Україні, +18,4% за рік</td><td>Найдешевше з трьох</td></tr>
+      <tr><td><b>Житло в родича</b></td><td>Так — і це головна економія</td><td>Так</td><td>Власне житло</td></tr>
+      <tr><td><b>Робота для дружини</b></td><td>Найбільший ринок праці в країні</td><td>Ринок малий, конкуренція ВПО висока</td><td>Обмежено</td></tr>
+      <tr><td><b>Школа/садок для дітей</b></td><td>Офлайн з укриттями, є вибір</td><td>Офлайн, але місць бракує через напливи ВПО</td><td>Переважно онлайн</td></tr>
+      <tr><td><b>Ви бачитесь із сім'єю</b></td><td><span class="tag t-ok">Так</span> ~5–6 год дороги</td><td><span class="tag t-mid">Рідко</span> ~20 год дороги</td><td><span class="tag t-ok">Щодня</span></td></tr>
+      <tr><td><b>Вплив на швейцарську опцію</b></td><td><span class="tag t-ok">Не закриває</span></td><td><span class="tag t-bad">Закриває</span></td><td><span class="tag t-ok">Зберігає</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">10</div>
+</section>
+
+<!-- ============ 11. ALTERNATIVES ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 9</div>
+    <h2>Інші країни: чому 2026-й — не 2022-й</h2>
+  </div>
+
+  <p class="lead">Загальний тренд по Європі однозначний: захист продовжують, але підтримку звужують і
+  прив'язують до роботи, навчання і фактичного проживання. Тому поради знайомих зразка 2022–2023 років
+  зараз можуть бути шкідливими.</p>
+
+  <table>
+    <thead><tr><th style="width:18%">Країна</th><th>Стан у 2026 році</th><th style="width:20%">Висновок</th></tr></thead>
+    <tbody>
+      <tr><td><b>Німеччина</b></td>
+        <td>Ті, хто прибув <b>після 1 квітня 2025 року</b>, більше не отримують Bürgergeld — лише виплати за законом про притулок: ≈ <b>455 €/міс</b> на одну особу у 2026. З 1 липня 2026 діє нова система Grundsicherung</td>
+        <td>Більше <b>не</b> «країна з найбільшими виплатами» для нових приїжджих. Стара репутація застаріла</td></tr>
+      <tr><td><b>Польща</b></td>
+        <td>Статус UKR і перебування — до 4 березня 2027; спецзакон поетапно згортають. З лютого 2026 виплата «800+» лише за умови офіційної зайнятості батьків і навчання дитини в польській школі</td>
+        <td>Близько і мовно легко, але підтримка стала мінімальною. Радше «перевалочний пункт»</td></tr>
+      <tr><td><b>Норвегія</b></td>
+        <td>Участь в інтеграційній програмі дає ≈ 18 000–22 000 NOK/міс (≈1 550–1 900 € до податків), але лише за активної участі; з 2025 підтримку суттєво обмежили — виплати ≈564 € лише для тих, хто живе в державних гуртожитках</td>
+        <td>Потенційно високий дохід, але жорсткі умови й довга черга на розселення</td></tr>
+      <tr><td><b>Нідерланди</b></td>
+        <td>Тимчасовий захист підтверджено до березня 2027; житлова криза, розміщення муніципальне і обмежене</td>
+        <td>Стабільно, але з житлом складно</td></tr>
+      <tr><td><b>Ірландія</b></td>
+        <td>Виплати тим, хто живе в державному житлі, урізані ще з 2024 року</td>
+        <td>Втратила колишню привабливість</td></tr>
+      <tr><td><b>Чехія / інші ЄС</b></td>
+        <td>Захист продовжено; модель «підтримка в обмін на зайнятість», житлова допомога обмежена в часі</td>
+        <td>Придатне, якщо є конкретна робота або родичі на місці</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box soft">
+    <h3>Загальноєвропейський горизонт</h3>
+    <p style="margin-bottom:0">Тимчасовий захист у ЄС продовжено до <b>4 березня 2027 року</b>, а в липні
+    2026 року країни ЄС домовилися продовжити його ще на рік — <b>до 4 березня 2028 року</b>. Паралельно
+    ухвалено рекомендації щодо переходу: країни мають готувати національні дозволи на проживання (робота,
+    навчання, сім'я) для тих, хто залишиться, і механізми добровільного повернення.
+    <b>Практичний висновок:</b> будь-який виїзд варто планувати не як «перечекати пів року», а як
+    <b>2–3 роки з відкритим фіналом</b>. Хто за цей час знайде роботу і вивчить мову — залишиться легально
+    й без прив'язки до тимчасового статусу.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">11</div>
+</section>
+
+<!-- ============ 12. MONEY MODEL ============ -->
+<section class="page dense tighter">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 10</div>
+    <h2>Гроші: модельний місячний бюджет</h2>
+  </div>
+
+  <div class="box warn" style="margin-bottom:14px">
+    <p class="small" style="margin-bottom:0"><b>Умови моделі.</b> Розрахунок для <b>матері з двома дітьми
+    шкільного віку</b>, без офіційного доходу в перші місяці. Всі суми — <b>оцінка</b> за відкритими даними
+    станом на серпень 2026, з округленням; курс орієнтовно $1 ≈ 44,8 ₴ (НБУ, серпень 2026), €1 ≈ 52 ₴,
+    1 CHF ≈ 56 ₴, 1 DKK ≈ 7 ₴ — перевірте актуальний курс. Реальні суми залежать від кантону/муніципалітету,
+    складу сім'ї та віку дітей. Це орієнтир для порівняння, а не гарантія.</p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:18%">Варіант</th><th style="width:24%">Що дає держава</th><th style="width:22%">За житло платить</th><th style="width:20%">Орієнтовно «на руки» після житла</th><th>Ключове</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>🇨🇭 Швейцарія</b></td>
+        <td>Азильна соцдопомога кантону + оплачене житло + субсидоване медстрахування</td>
+        <td><span class="tag t-ok">Кантон</span></td>
+        <td><b>≈ 1 300–1 800 CHF</b><br><span class="muted">≈ 73 000–100 000 ₴</span></td>
+        <td>Найбільший чистий ресурс; житло і медицина зняті з бюджету</td>
+      </tr>
+      <tr>
+        <td><b>🇩🇰 Данія</b></td>
+        <td>Kontanthjælp ≈ 15 874 kr до податку (одинокий батько/мати 30+) + дитячі + boligstøtte</td>
+        <td><span class="tag t-mid">Ви, з виплати</span></td>
+        <td><b>≈ 5 000–7 000 kr</b><br><span class="muted">≈ 35 000–49 000 ₴</span></td>
+        <td>Виплата виглядає більшою, але оренда з'їдає половину</td>
+      </tr>
+      <tr>
+        <td><b>Київ, у батька</b></td>
+        <td>ВПО: 2 000 + 3 000 + 3 000 = <b>8 000 ₴</b> + «Прихисток» 450 ₴/особу батькові</td>
+        <td><span class="tag t-ok">Родич</span></td>
+        <td><b>≈ 8 000 ₴</b> + ваш дохід</td>
+        <td>Найдешевше, сім'я не розірвана; але допомога символічна</td>
+      </tr>
+      <tr>
+        <td><b>Київ, окремо</b></td>
+        <td>ВПО 8 000 ₴ + можлива субсидія на оренду</td>
+        <td><span class="tag t-bad">Ви: ≈17 000 ₴ + комуналка</span></td>
+        <td><b>Мінус ≈ 12 000 ₴</b> на місяць</td>
+        <td>Дефіцит покривається лише вашим доходом</td>
+      </tr>
+      <tr>
+        <td><b>Ужгород, у сестри</b></td>
+        <td>ВПО 8 000 ₴ + «Прихисток» сестрі</td>
+        <td><span class="tag t-ok">Родич</span></td>
+        <td><b>≈ 8 000 ₴</b> + ваш дохід</td>
+        <td>Безпечно, але закриває Швейцарію; робота знайдеться важко</td>
+      </tr>
+      <tr>
+        <td><b>Ужгород, окремо</b></td>
+        <td>ВПО 8 000 ₴</td>
+        <td><span class="tag t-bad">Ви: ≈22 500 ₴ + комуналка</span></td>
+        <td><b>Мінус ≈ 17 500 ₴</b> на місяць</td>
+        <td>Найгірша економіка з усіх варіантів</td>
+      </tr>
+      <tr>
+        <td><b>Суми</b></td>
+        <td>Немає (ВПО не оформити, живучи вдома)</td>
+        <td>Власне житло</td>
+        <td>Ваш дохід</td>
+        <td>Фінансово найлегше, за ціною ризику для життя</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box gold">
+    <h3>Головне число, яке варто запам'ятати</h3>
+    <p style="margin-bottom:0">Різниця між «Ужгород окремо» і «Швейцарія» — це не 10–20%. Це різниця між
+    <b>мінус 17 500 ₴ щомісяця з вашої кишені</b> і <b>плюс ~70–100 тис. ₴ еквіваленту без витрат на житло і
+    медицину</b>. Саме тому аргумент «за кордоном дорого» у цьому конкретному випадку працює навпаки:
+    найдорожчий для сімейного бюджету варіант — це знімати житло в Ужгороді.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">12</div>
+</section>
+
+<!-- ============ 13. NON-MONEY ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 11</div>
+    <h2>Ціна, якої немає в таблицях</h2>
+  </div>
+
+  <p class="lead">Фінансова частина цього рішення — найпростіша. Найважче — те, що не рахується в гривнях,
+  і саме тут ламається більшість сімей. Це варто прочитати вдвох.</p>
+
+  <div class="grid2">
+    <div class="box">
+      <h3>Розлука — головна стаття витрат</h3>
+      <p style="margin-bottom:0">Ви не зможете приїхати до них; вона зможе приїхати до вас лише на обмежену
+      кількість днів. Реалістичний режим — <b>кілька коротких зустрічей на рік</b> плюс щоденний відеозв'язок.
+      Досвід сотень тисяч українських сімей із 2022 року: перші 6 місяців найважчі, а найбільший ризик — не
+      сварка, а поступове віддалення. Це керовано, але тільки якщо про це домовитись <u>заздалегідь</u>:
+      частота дзвінків, спільні рішення, спільний бюджет, дата перегляду рішення.</p>
+    </div>
+    <div class="box">
+      <h3>Діти: подвійна школа</h3>
+      <p style="margin-bottom:0">За кордоном діти зобов'язані ходити в місцеву школу. Українську часто тягнуть
+      паралельно онлайн — це подвійне навантаження і головна причина вигорання. Треба вирішити чесно:
+      чи тримаєте ви українську програму «про всяк випадок», чи робите ставку на місцеву. Для дитини у
+      випускних класах це рішення критичне.</p>
+    </div>
+    <div class="box">
+      <h3>Кар'єра дружини</h3>
+      <p style="margin-bottom:0">Перші 1–2 роки — це майже завжди робота нижче кваліфікації плюс мовні курси.
+      Це нормально і тимчасово, але до цього треба бути готовою морально. Дистанційна робота на Україну —
+      величезна перевага: вона і зберігає дохід, і робить статус менш вразливим.</p>
+    </div>
+    <div class="box">
+      <h3>Оборотність рішення</h3>
+      <p style="margin-bottom:0">Виїзд <b>оборотний</b>: повернутися можна будь-коли. Незворотні лише
+      <b>втрачені вікна</b> — правило про «останнє місце проживання» у Швейцарії, дата подання заяви в Данії,
+      навчальний рік дитини. Тому правильна логіка не «їхати назавжди», а «зберегти собі право вибору».</p>
+    </div>
+  </div>
+
+  <div class="box danger">
+    <h3>Ризик, який недооцінюють найчастіше</h3>
+    <p style="margin-bottom:0">Найгірший з реальних сценаріїв — не «поїхали і пошкодували». Найгірший —
+    <b>«вирішували пів року, а потім вивозили дітей терміново після влучання по сусідньому будинку»</b>:
+    без підготовки, без документів, без грошей, у стані шоку, коли вибору вже немає і беруть будь-який
+    варіант. Ціна рішення, ухваленого спокійно за два тижні, у рази нижча за ціну того самого рішення,
+    ухваленого за одну ніч.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">13</div>
+</section>
+
+<!-- ============ 14. RECOMMENDATION ============ -->
+<section class="page dense">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 12</div>
+    <h2>Три чесні сценарії — оберіть свій</h2>
+  </div>
+
+  <p class="lead">Немає «об'єктивно правильного» варіанту: він залежить від того, що для вашої сім'ї
+  пріоритет №1. Нижче — три послідовні стратегії. Кожна внутрішньо несуперечлива. Оберіть одну і тримайтесь її.</p>
+
+  <div class="box ok">
+    <h3>Сценарій «Безпека і ресурс» — якщо пріоритет №1 це діти поза зоною ударів</h3>
+    <ol style="margin-bottom:0">
+      <li>Протягом <b>1–2 тижнів</b> зібрати документи (закордонні паспорти дітей — найдовший пункт).</li>
+      <li>Виїзд <b>прямо із Сум</b>, без проміжної реєстрації ВПО в Закарпатті.</li>
+      <li>Маршрут: Суми → Київ → потяг/автобус до Польщі → Швейцарія. Реєстрація через RegisterMe одразу.</li>
+      <li>Паралельно як запасний варіант тримати Данію (заява подається лише в Данії, тому це «або-або» за фактом прибуття).</li>
+      <li>Дата перегляду рішення — через 6 місяців, разом.</li>
+    </ol>
+  </div>
+
+  <div class="box gold">
+    <h3>Сценарій «Сім'я разом» — якщо пріоритет №1 не розривати родину</h3>
+    <ol style="margin-bottom:0">
+      <li>Переїзд до батька в Київ, оформлення довідки ВПО і виплат (8 000 ₴/міс на трьох).</li>
+      <li>Батько оформлює «Прихисток» — 450 ₴/міс за кожного.</li>
+      <li>Ви приїжджаєте регулярно; сім'я зберігає єдність.</li>
+      <li><b>Швейцарський варіант залишається в резерві</b> — Київ його не закриває (але слідкуйте за
+      можливим розширенням списку «безпечних» регіонів).</li>
+      <li>Умова перегляду, домовлена наперед: якщо інтенсивність ударів по Києву зросте до сумського рівня —
+      переходимо до сценарію 1 без нових дискусій.</li>
+    </ol>
+  </div>
+
+  <div class="box">
+    <h3>Сценарій «Ужгород» — коли він виправданий</h3>
+    <p style="margin-bottom:0">Лише якщо: (а) сестра дає житло безкоштовно і надовго, (б) закордон принципово
+    виключений з інших міркувань (здоров'я, догляд за літніми, робота), (в) ви свідомо відмовляєтесь від
+    швейцарського варіанту. <b>Знімати житло в Ужгороді за 22 500 ₴ — найгірше рішення з усіх розглянутих</b>:
+    ви платите найдорожчу оренду в Україні, отримуєте 8 000 ₴ допомоги і при цьому втрачаєте доступ до
+    програми, яка покрила б і житло, і медицину.</p>
+  </div>
+
+  <div class="box soft">
+    <h3>Що я рекомендував би зробити в найближчі 72 години — за будь-якого сценарію</h3>
+    <ul style="margin-bottom:0">
+      <li><b>Подати на закордонні паспорти дітям</b>, якщо їх немає. Це не зобов'язує ні до чого, але без них
+      жоден закордонний варіант неможливий, а строк виготовлення — тижні.</li>
+      <li><b>Написати офіційний запит у SEM</b> (Швейцарія) з описом ситуації: чи дає Сумська область право на
+      статус S сьогодні і як оцінюють «останнє місце проживання». Відповідь письмово — це безкоштовно.</li>
+      <li><b>Не оформлювати довідку ВПО в Ужгороді</b>, доки рішення не ухвалене остаточно.</li>
+    </ul>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">14</div>
+</section>
+
+<!-- ============ 15. ACTION PLAN ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 13</div>
+    <h2>План дій на 14 днів</h2>
+  </div>
+
+  <h3>Документи (найдовший етап — почніть сьогодні)</h3>
+  <ul class="check">
+    <li>Закордонні біометричні паспорти: дружина + кожна дитина</li>
+    <li>Свідоцтва про народження дітей (оригінали) + нотаріальні переклади англійською</li>
+    <li>Свідоцтво про шлюб + переклад</li>
+    <li>Медичні документи: щеплення дітей, виписки за хронічними діагнозами + переклад</li>
+    <li>Шкільні документи: табелі, довідки про клас навчання</li>
+    <li>Внутрішні паспорти, ІПН, довідка про склад сім'ї</li>
+    <li>Скани <b>усього</b> в хмару + на пошту вам і їй (доступ з будь-якої точки)</li>
+    <li>Довіреність від дружини на вас для вирішення майнових питань в Україні</li>
+  </ul>
+
+  <h3>Перевірка фактів перед виїздом (усе безкоштовно)</h3>
+  <ul class="check">
+    <li><b>SEM (Швейцарія):</b> лист із запитом — чи дає Сумська область підставу для статусу S станом на дату виїзду; який документ підтверджує останнє місце проживання; ліміт днів перебування в Україні</li>
+    <li><b>Швейцарська рада у справах біженців</b> (fluechtlingshilfe.ch) — безкоштовна юридична консультація</li>
+    <li><b>Udlændingestyrelsen (Данія):</b> чи можна подати заяву за Særlov зараз, які документи, який строк розгляду, які правила поїздок в Україну</li>
+    <li>UNHCR Help (help.unhcr.org) — сторінки по Швейцарії та Данії українською</li>
+    <li>Перевірити, чи не змінилося рішення Федеральної ради Швейцарії — воно очікується <b>цього літа</b></li>
+  </ul>
+
+  <h3>Гроші й логістика</h3>
+  <ul class="check">
+    <li>Подушка на переїзд: квитки + 1–2 місяці життя до перших виплат (перші гроші йдуть не миттєво)</li>
+    <li>Картка міжнародної платіжної системи, що працює в ЄС; доступ до онлайн-банку</li>
+    <li>Мобільний зв'язок: eSIM або європейська SIM з першого дня</li>
+    <li>Маршрут і бронювання; для дітей — довга дорога з пересадками, планувати з запасом</li>
+    <li>Контакт української громади в місті прибуття (спільноти в Telegram/Facebook) — до виїзду, не після</li>
+  </ul>
+
+  <div class="box warn">
+    <p style="margin-bottom:0"><b>Обережно з «допомогою» за гроші.</b> Ані статус S, ані данський Særlov
+    <u>не потребують</u> посередників, «прискорення» чи оплати. Заяви подаються самостійно і безкоштовно.
+    Будь-хто, хто пропонує «гарантувати статус» за гроші — шахрай. Це типова схема саме навколо родин із
+    прифронтових областей.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">15</div>
+</section>
+
+<!-- ============ 16. QUESTIONS ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 14</div>
+    <h2>Вісім питань, на які треба відповісти разом</h2>
+  </div>
+
+  <p class="lead">Цей документ дає факти. Рішення ухвалюєте ви вдвох. Пропоную не сперечатися про висновок,
+  а спокійно пройти ці вісім питань — коли відповіді записані, рішення зазвичай стає очевидним само.</p>
+
+  <ol class="qlist">
+    <li><b>Що для нас пріоритет №1: фізична безпека дітей чи цілісність сім'ї?</b>
+      Обидва варіанти легітимні, але одночасно їх не буває. Той, хто відповість чесно першим, зніме 80% суперечки.</li>
+    <li><b>Який рівень ризику ми вважаємо неприйнятним?</b>
+      Сформулюйте конкретний тригер: «якщо приліт у радіусі N кварталів» або «якщо школа перейде повністю в укриття» — і зафіксуйте його заздалегідь, поки емоцій нема.</li>
+    <li><b>На який строк ми плануємо?</b>
+      Пів року, два роки чи «поки не закінчиться»? Від цього залежить усе: школа дітей, мова, робота, оренда.</li>
+    <li><b>Чи готова дружина до року роботи нижче кваліфікації та мовних курсів?</b>
+      Це реальність перших 12–18 місяців у будь-якій країні. Без цієї готовності виїзд закінчується поверненням через 3 місяці.</li>
+    <li><b>Чи витримаємо ми розлуку і як саме її організуємо?</b>
+      Конкретно: скільки дзвінків, хто ухвалює які рішення, спільний бюджет, дата перегляду рішення.</li>
+    <li><b>Скільки грошей у нас є на 3 місяці переходу?</b>
+      Виплати приходять не одразу. Мінімальна подушка — квитки + житло/їжа на 6–8 тижнів.</li>
+    <li><b>Що робимо з житлом і майном у Сумах?</b>
+      Хто наглядає, що зі страховкою, як фіксуємо стан на випадок пошкоджень (фото + акт — це основа для «єВідновлення»).</li>
+    <li><b>Яка наша умова повернення?</b>
+      Напишіть її одним реченням заздалегідь. Сім'ї, які мають записану умову повернення, набагато легше переживають перші місяці.</li>
+  </ol>
+
+  <div class="box ok">
+    <p style="margin-bottom:0"><b>І останнє.</b> Ваша дружина, пропонуючи Київ чи Ужгород, робить не «слабкий»
+    вибір — вона намагається не рвати сім'ю. Ви, дивлячись на закордонні програми, не «виганяєте» родину —
+    ви шукаєте для дітей безпеку і ресурс. Ви обидва вирішуєте одну задачу з різних боків.
+    Цей документ — не аргумент однієї зі сторін, а спільна фактична база.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми</div>
+  <div class="pagenum">16</div>
+</section>
+
+<!-- ============ 17. SOURCES ============ -->
+<section class="page">
+  <div class="pagehead">
+    <div class="eyebrow">Розділ 15</div>
+    <h2>Джерела та застереження</h2>
+  </div>
+
+  <div class="box warn">
+    <h3>Застереження</h3>
+    <ul style="margin-bottom:0">
+      <li>Документ підготовлено <b>12 серпня 2026 року</b> на основі відкритих джерел. Міграційні правила
+      змінюються швидко — <b>перевірте ключові пункти на офіційних сайтах у день ухвалення рішення</b>.</li>
+      <li>Це <b>аналітика, а не юридична консультація</b>. Рішення по конкретній заяві ухвалює лише
+      відповідний державний орган.</li>
+      <li>Суми виплат, обмеження на поїздки та вимоги до документів наведено як <b>орієнтир</b>; вони залежать
+      від кантону/муніципалітету, складу сім'ї та індивідуальних обставин.</li>
+      <li>Частина деталей (ліміт днів перебування в Україні для статусу S; правила поїздок для Данії; точні
+      ставки виплат на дітей) походить із вторинних джерел і <b>потребує підтвердження в SEM та
+      Udlændingestyrelsen</b>.</li>
+    </ul>
+  </div>
+
+  <h3>Офіційні джерела — з них починати перевірку</h3>
+  <ul class="src">
+    <li><b>SEM (Швейцарія), статус S і правило семи регіонів:</b> sem.admin.ch/sem/de/home/asyl/ukraine/regelung.html</li>
+    <li><b>Федеральна рада Швейцарії, консультації «Майбутнє статусу S», 19.06.2026:</b> admin.ch/de/newnsb/0oWuu8LZli5y</li>
+    <li><b>Швейцарська рада у справах біженців:</b> fluechtlingshilfe.ch/hilfe-fuer-schutzsuchende/ukraine-informationen-fuer-schutzsuchende</li>
+    <li><b>UNHCR Швейцарія:</b> help.unhcr.org/switzerland/ukraine/</li>
+    <li><b>Udlændingestyrelsen (Данія), інформація українською:</b> nyidanmark.dk/uk-UA/Words-and-concepts/Fælles/Information-Ukraine</li>
+    <li><b>Данія, зміни щодо чоловіків 23–60 років (25.06.2026):</b> nyidanmark.dk/en-GB/News-Front-Page/2026/06/</li>
+    <li><b>Рада ЄС, продовження тимчасового захисту до 04.03.2028 (15.07.2026):</b> consilium.europa.eu/en/press/press-releases/2026/07/15/</li>
+    <li><b>Ставки виплат у Данії 2026:</b> bm.dk/satser/satser-for-2026/kontanthjaelp</li>
+    <li><b>Виплати ВПО в Україні 2026:</b> legalaid.gov.ua · Дія · Мінсоцполітики</li>
+    <li><b>SKOS (Швейцарія), соцдопомога для осіб зі статусом S:</b> skos.ch/themen/gefluechtete-aus-der-ukraine</li>
+  </ul>
+
+  <h3>Аналітика і статистика, використані в документі</h3>
+  <ul class="src">
+    <li>AIDA / asylumineurope.org — оновлення «Status S» 2025–2026</li>
+    <li>swissinfo.ch, SRF, NZZ — рішення Федеральної ради, ставки соцдопомоги по кантонах</li>
+    <li>Ukrainska Pravda, Kyiv Independent, RBC-Ukraine — законопроєкт Данії від 25.06.2026</li>
+    <li>Суспільне Суми, Данкор, cukr.city, Радіо Свобода — обстріли Сум, серпень 2026</li>
+    <li>ЛУН / 24tv / РБК-Україна — медіанні ціни оренди в Ужгороді та Києві, липень 2026</li>
+    <li>Mediendienst Integration, bpb.de — виплати для українців у Німеччині 2026</li>
+    <li>UNHCR Польща, naszwybir.pl — статус UKR і спецзакон Польщі 2026</li>
+  </ul>
+
+  <div class="spacer"></div>
+
+  <div class="box soft">
+    <p style="margin-bottom:0"><b>Що я готовий доопрацювати:</b> персональний розрахунок під конкретний вік
+    дітей і професію дружини; порівняння конкретних кантонів Швейцарії або муніципалітетів Данії;
+    покроковий маршрут із розкладами й вартістю; текст запиту в SEM та Udlændingestyrelsen; окрему коротку
+    версію документа на 2 сторінки для розмови з рідними.</p>
+  </div>
+
+  <div class="footmark">Аналіз для сім'ї · Суми · 12.08.2026</div>
+  <div class="pagenum">17</div>
+</section>
+
+</body>
+</html>
