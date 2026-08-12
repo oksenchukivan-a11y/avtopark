@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v85';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v86';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -551,21 +551,40 @@ async function rebootTracker(id) {
 // ===== Малюнки авто для маркерів (безпечно: метадані містять лише КЛЮЧ зі списку, не сам HTML) =====
 // Емодзі на карті дрібне й невиразне; для машин, де хочеться нормальний вигляд, ставимо metadata.iconSvg.
 const VEH_SVG = {
-  // кросовер/позашляховик, білий кузов (Volvo XC40)
-  suv: '<svg viewBox="0 0 64 34" width="30" height="30" aria-hidden="true">'
-     + '<path d="M4.5 25c0-3.4.7-6.4 2.2-8.4l1.8-1.9c1.1-1.1 3-1.9 5-1.9h4.9l6.1-4.9c1.2-1 2.9-1.6 4.6-1.6h8.2c1.9 0 3.7.7 4.8 1.9l4.7 4.6h5.3c3 0 5.8 1.9 6.8 4.7l1.1 3.9c.4 1.6.4 2.7 0 3.6z" fill="#ffffff" stroke="#16202c" stroke-width="1.6" stroke-linejoin="round"/>'
-     + '<path d="M23.5 12.6l4.6-3.9c.7-.6 1.7-1 2.7-1h5.6c1.2 0 2.3.4 3 1.1l4.1 3.8z" fill="#7fb0da"/>'
-     + '<circle cx="17.5" cy="25.5" r="6" fill="#121a24"/><circle cx="46.5" cy="25.5" r="6" fill="#121a24"/>'
-     + '<circle cx="17.5" cy="25.5" r="2.4" fill="#d7dfe8"/><circle cx="46.5" cy="25.5" r="2.4" fill="#d7dfe8"/>'
-     + '</svg>',
-  // фургон (Master/Ducato-подібні)
-  van: '<svg viewBox="0 0 64 34" width="30" height="30" aria-hidden="true">'
-     + '<path d="M5 24V12c0-2 1.6-3.6 3.6-3.6h24c1.5 0 2.9.6 3.9 1.7l8.8 9.3h9.1c2.6 0 4.6 2 4.6 4.6z" fill="#ffffff" stroke="#16202c" stroke-width="1.6" stroke-linejoin="round"/>'
-     + '<path d="M35.5 11.5l7 7.4h-7z" fill="#7fb0da"/><rect x="9" y="11.5" width="9" height="7" rx="1" fill="#7fb0da"/>'
-     + '<circle cx="18" cy="25" r="5.6" fill="#121a24"/><circle cx="47" cy="25" r="5.6" fill="#121a24"/>'
-     + '<circle cx="18" cy="25" r="2.2" fill="#d7dfe8"/><circle cx="47" cy="25" r="2.2" fill="#d7dfe8"/>'
-     + '</svg>'
+  // ФУРГОН високий (Renault Master): короткий капот, високий дах, довгий вантажний відсік
+  van: c => '<svg viewBox="0 0 64 34" width="32" height="32">'
+    + '<path d="M4.5 25.5V10.5c0-1.7 1.3-3 3-3h25.6c1.3 0 2.5.6 3.3 1.6l6.2 7.9h11c2.5 0 4.6 2 4.6 4.6v4z"'
+    + ' fill="'+c+'" stroke="#0d141c" stroke-width="1.6" stroke-linejoin="round"/>'
+    + '<path d="M36.4 9.6l5.4 6.9h-5.4z" fill="#8fc0e8"/>'
+    + '<rect x="8.5" y="10.8" width="9" height="5.4" rx=".8" fill="#8fc0e8"/>'
+    + '<circle cx="16" cy="25.5" r="5.8" fill="#10161f"/><circle cx="48" cy="25.5" r="5.8" fill="#10161f"/>'
+    + '<circle cx="16" cy="25.5" r="2.3" fill="#dbe4ee"/><circle cx="48" cy="25.5" r="2.3" fill="#dbe4ee"/></svg>',
+  // КАНГУ / малий фургон: короткий, з вираженим капотом
+  kangoo: c => '<svg viewBox="0 0 64 34" width="32" height="32">'
+    + '<path d="M6 25.5V13.5c0-1.5 1.2-2.7 2.7-2.7h17.6c1.2 0 2.3.5 3 1.4l4.4 5.3h11.6c3.4 0 6.4 2 7.7 5.1l1.3 3z"'
+    + ' fill="'+c+'" stroke="#0d141c" stroke-width="1.6" stroke-linejoin="round"/>'
+    + '<path d="M27.4 12.6l3.9 4.9h-3.9z" fill="#8fc0e8"/>'
+    + '<rect x="9.6" y="13.6" width="7.6" height="4.4" rx=".7" fill="#8fc0e8"/>'
+    + '<circle cx="17" cy="25.5" r="5.6" fill="#10161f"/><circle cx="45" cy="25.5" r="5.6" fill="#10161f"/>'
+    + '<circle cx="17" cy="25.5" r="2.2" fill="#dbe4ee"/><circle cx="45" cy="25.5" r="2.2" fill="#dbe4ee"/></svg>',
+  // ЛЕГКОВИЙ хетчбек (Nissan Leaf): низький, обтічний
+  hatch: c => '<svg viewBox="0 0 64 34" width="32" height="32">'
+    + '<path d="M4 25.5l1.4-6.2c.4-1.8 1.7-3.2 3.4-3.8l7.4-2.6 5.6-3.4c1.2-.7 2.6-1.1 4-1.1h9.4c1.7 0 3.3.6 4.5 1.7l5.6 5 8.8 1.8c2.7.6 4.7 2.9 4.9 5.6l.3 3z"'
+    + ' fill="'+c+'" stroke="#0d141c" stroke-width="1.6" stroke-linejoin="round"/>'
+    + '<path d="M23 9.8h9.6c1.2 0 2.4.4 3.3 1.2l4.3 3.9-19.7-1.4z" fill="#8fc0e8"/>'
+    + '<circle cx="17" cy="25.5" r="5.6" fill="#10161f"/><circle cx="46" cy="25.5" r="5.6" fill="#10161f"/>'
+    + '<circle cx="17" cy="25.5" r="2.2" fill="#dbe4ee"/><circle cx="46" cy="25.5" r="2.2" fill="#dbe4ee"/></svg>',
+  // КРОСОВЕР
+  suv: c => '<svg viewBox="0 0 64 34" width="32" height="32">'
+    + '<path d="M4.5 25c0-3.4.7-6.4 2.2-8.4l1.8-1.9c1.1-1.1 3-1.9 5-1.9h4.9l6.1-4.9c1.2-1 2.9-1.6 4.6-1.6h8.2c1.9 0 3.7.7 4.8 1.9l4.7 4.6h5.3c3 0 5.8 1.9 6.8 4.7l1.1 3.9c.4 1.6.4 2.7 0 3.6z"'
+    + ' fill="'+c+'" stroke="#0d141c" stroke-width="1.6" stroke-linejoin="round"/>'
+    + '<path d="M23.5 12.6l4.6-3.9c.7-.6 1.7-1 2.7-1h5.6c1.2 0 2.3.4 3 1.1l4.1 3.8z" fill="#8fc0e8"/>'
+    + '<circle cx="17.5" cy="25.5" r="6" fill="#10161f"/><circle cx="46.5" cy="25.5" r="6" fill="#10161f"/>'
+    + '<circle cx="17.5" cy="25.5" r="2.4" fill="#dbe4ee"/><circle cx="46.5" cy="25.5" r="2.4" fill="#dbe4ee"/></svg>'
 };
+// колір кузова беремо з метаданих, але ЛИШЕ якщо це справжній hex — інакше чужі метадані могли б
+// підсунути довільний код усередину SVG
+function safeColor(c, fallback) { return (typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c)) ? c : fallback; }
 function vehIcon(dev, online, active, gpsLost) {
   const m = dev.metadata || {};
   const color = m.color || '#3aa0ff';
@@ -577,10 +596,11 @@ function vehIcon(dev, online, active, gpsLost) {
   const badge = gpsLost ? '<div style="position:absolute;top:-4px;right:-4px;font-size:12px">⚠️</div>' : '';
   // color/icon — з метаданих flespi → esc обовʼязково (та сама модель загрози, що для імен: XSS = крадіжка токена)
   // metadata.iconSvg — КЛЮЧ зі списку VEH_SVG (не HTML!), тому XSS неможливий навіть з чужих метаданих
-  const svg = VEH_SVG[m.iconSvg];
-  const sz = svg ? 40 : 32;
+  const drawer = VEH_SVG[m.iconSvg];
+  const svg = drawer ? drawer(safeColor(m.color, '#dfe8f2')) : null;
+  const sz = svg ? 42 : 32;
   const inner = svg
-    ? '<div style="background:#0f1620;border:'+border+';border-radius:50%;width:40px;height:40px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 7px rgba(0,0,0,.55)'+glow+'">'+svg+'</div>'
+    ? '<div style="background:#1c2735;border:'+border+';border-radius:50%;width:42px;height:42px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.6)'+glow+'">'+svg+'</div>'
     : '<div style="background:'+esc(color)+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+esc(icon)+'</div>';
   const html = '<div style="position:relative;opacity:'+dim+'">'+inner+badge+'</div>';
   return L.divIcon({ className:'', html, iconSize:[sz,sz], iconAnchor:[sz/2,sz/2] });
