@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Автопарк</title>
+<!-- Захист токена: навіть якщо кудись просочиться чужий HTML, браузер не дасть відправити дані
+     нікуди, крім flespi та геокодера — connect-src це забороняє. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://unpkg.com 'unsafe-inline'; style-src 'self' https://unpkg.com 'unsafe-inline'; img-src 'self' data: https://*.google.com https://*.googleapis.com https://*.tile.openstreetmap.org; font-src 'self'; connect-src 'self' https://flespi.io https://nominatim.openstreetmap.org; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -81,8 +84,6 @@
   .card .top { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
   .card .name { font-size:16px; font-weight:600; flex:1; }
   .dot { width:9px; height:9px; border-radius:50%; flex:none; }
-  .dot.on { background:var(--green); box-shadow:0 0 8px var(--green); }
-  .dot.off { background:var(--dim); }
   .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
   .cell .v { font-size:18px; font-weight:700; }
   .cell .l { font-size:11px; color:var(--dim); margin-top:2px; }
@@ -130,12 +131,6 @@
   .tlx { flex:1; min-width:0; padding:3px 0 0 12px; }
   .tlx .t1 { font-weight:700; font-size:14.5px; }
   .tlx .t2 { font-size:12.5px; color:var(--dim); margin-top:2px; overflow-wrap:anywhere; }
-  .ev { display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--line); }
-  .ev:last-child { border-bottom:none; }
-  .ev .amt { font-weight:700; font-size:16px; }
-  .ev .amt.up { color:var(--green); }
-  .ev .amt.down { color:var(--red); }
-  .ev .when { font-size:12px; color:var(--dim); }
   .muted { color:var(--dim); font-size:13px; text-align:center; padding:8px 0; }
   .tabs { display:flex; gap:8px; margin-bottom:12px; overflow-x:auto; -webkit-overflow-scrolling:touch;
     scrollbar-width:none; padding-bottom:2px; min-height:38px; }
@@ -153,9 +148,9 @@
 <div id="login">
   <h1>🚚 Автопарк</h1>
   <p>Встав свій <b>flespi-токен</b> один раз — застосунок запам'ятає його і більше не питатиме.</p>
-  <input id="tokenInput" type="text" placeholder="flespi token" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <input id="tokenInput" type="password" autocomplete="off" placeholder="flespi token" autocapitalize="off" autocorrect="off" spellcheck="false">
   <button class="btn" onclick="saveToken()">Увійти</button>
-  <p style="font-size:12px">Токен зберігається тільки у твоєму телефоні (localStorage), нікуди не передається.</p>
+  <p style="font-size:12px">Токен зберігається лише на цьому телефоні й надсилається тільки на flespi.io.</p>
 </div>
 
 <!-- ОСНОВНИЙ ЕКРАН -->

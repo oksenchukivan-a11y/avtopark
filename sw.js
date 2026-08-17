@@ -1,7 +1,7 @@
 // Service worker — застосунок ставиться як додаток і працює офлайн.
 // Стратегія: код (html/js) — мережа-перша (оновлення видно одразу), статика — кеш-перша.
 // API flespi НЕ кешуємо — дані завжди свіжі.
-const CACHE = 'avtopark-v86';
+const CACHE = 'avtopark-v87';
 const SHELL_LOCAL = [
   './',
   './index.html',
@@ -52,19 +52,20 @@ self.addEventListener('fetch', e => {
     e.respondWith(fetch(e.request).catch(() => new Response('', { status: 503 })));
     return;
   }
-  // наш код (index.html, app.js, sw, manifest) — мережа-перша, кеш як запас офлайн.
-  // Прив'язка до origin, а не до шляху '/avtopark/' — інакше на іншому хостингу код «залипав» би в кеші.
+  // НАШ КОД: спершу з кешу (миттєвий показ), оновлення підтягуємо у фоні.
+  // Раніше було «мережа-перша» — і кожне відкриття чекало завантаження app.js (150 КБ)
+  // перед першим пікселем; на слабкій мережі це секунди білого екрана.
+  // Свіжість гарантує окремий механізм: застосунок питає version.txt (повз кеш) і сам
+  // перезавантажується, коли на сервері новіша версія.
   if (url.startsWith(self.location.origin) && (url.endsWith('.html') || url.endsWith('.js') || url.endsWith('/') || url.endsWith('.json'))) {
     e.respondWith(
-      fetch(e.request).then(r => {
-        // кешуємо ЛИШЕ вдалу відповідь: 404/500 у вікні деплою GitHub Pages інакше перетирали
-        // робочий app.js у кеші → офлайн-відкриття давало білий екран
-        if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{}); }
-        return r;
-      }).catch(() =>
-        // ignoreSearch: start_url PWA може мати query (./?...) — без цього офлайн-промах на рівному місці
-        caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('./index.html'))
-      )
+      caches.match(e.request, { ignoreSearch: true }).then(cached => {
+        const net = fetch(e.request).then(r => {
+          if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{}); }
+          return r;
+        }).catch(() => cached || (e.request.mode === 'navigate' ? caches.match('./index.html') : Response.error()));
+        return cached || net;   // є в кеші — віддаємо ОДРАЗУ, мережа оновить кеш у фоні
+      })
     );
     return;
   }

@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v86';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v87';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -30,12 +30,10 @@ function saveToken() {
   if (!t) return alert('Встав токен');
   localStorage.setItem('flespi_token', t);
   init();
-checkVersion(true);                       // одразу на старті
-setInterval(() => checkVersion(), 600000); // і раз на 10 хв, поки застосунок відкритий
 }
 function logout() {
   if (!confirm('Вийти і забути токен?')) return;
-  localStorage.removeItem('flespi_token');
+  try { localStorage.clear(); } catch(e) {}   // не лише токен: історія, адреси, позиції — усе
   location.reload();
 }
 
@@ -47,7 +45,10 @@ function logout() {
 let _authFails = 0, _authFirstAt = 0, _loggingOut = false;
 async function api(path, method, body) {
   let last;
-  for (let i = 0; i < 3; i++) {
+  // POST НЕ повторюємо: повторений /commands-queue ставив 2-3 однакові cpureset,
+  // і трекер міг піти в цикл перезавантажень просто через повільну мережу
+  const attempts = (!method || method === 'GET') ? 3 : 1;
+  for (let i = 0; i < attempts; i++) {
     try {
       const opt = { method: method || 'GET', headers: { Authorization: 'FlespiToken ' + token() } };
       if (body != null) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
@@ -153,6 +154,17 @@ function perpDistM(p, a, b){
   return Math.hypot(P[0]-(A[0]+t*dx), P[1]-(A[1]+t*dy));
 }
 // згладжування треку (Дуглас-Пекер): прибирає зубчастість GPS-шуму, зберігаючи форму реального маршруту
+// Перед спрощенням прорідити: місячний трек — це сотні тисяч точок, і рекурсивний
+// Дуглас-Пекер морозив головний потік на кілька секунд. 8000 точок цілком вистачає для карти.
+function thinTrack(pts){
+  const MAXP = 8000;
+  if (pts.length <= MAXP) return pts;
+  const step = Math.ceil(pts.length / MAXP);
+  const out = [];
+  for (let i = 0; i < pts.length; i += step) out.push(pts[i]);
+  if (out[out.length-1] !== pts[pts.length-1]) out.push(pts[pts.length-1]);
+  return out;
+}
 function simplifyTrack(pts, tolM){
   if (pts.length < 3) return pts;
   let maxD = 0, idx = 0;
@@ -173,7 +185,6 @@ function tankFor(x) {
   const id = (x && typeof x === 'object') ? x.id : x;
   const dev = (x && typeof x === 'object') ? x : devCache.find(d => d.id === id);
   if (dev && dev.metadata && dev.metadata.tank) return dev.metadata.tank;
-  if (TANKS[id] && TANKS[id].tank) return TANKS[id].tank;
   return null;
 }
 // Фізична стеля палива: у баку НЕ може бути більше за його ємність. Спільний хелпер для картки,
@@ -187,6 +198,10 @@ function tankFor(x) {
 // Два коефіцієнти рахуються по двох точках однієї заправки — і сходяться на обох кінцях.
 function calFuel(raw, md) {
   if (raw == null || !(raw > 0)) return null;
+  // СТЕЛЯ ДАТЧИКА (metadata.fuelSat): у Renault Master поплавок упирається в межу і далі не росте,
+  // скільки не лий. Заправки «під зав'язку» через це недомірювались на 6+ літрів (чек 54.34 → показ 48).
+  // Досягли стелі = бак повний.
+  if (md && md.fuelSat && md.tank && raw >= md.fuelSat) return md.tank;
   const L = raw * ((md && md.fuelFactor) || 1) + ((md && md.fuelOffset) || 0);
   return L > 0 ? L : null;   // від'ємне після зсуву = бак практично порожній / сміття
 }
@@ -200,7 +215,8 @@ function capFuel(liters, tank) {
 // памʼять останнього відомого палива (деякі авто, як Ducato, перестають слати рівень коли заглушені → 0/нема)
 let lastFuel = {};
 try { lastFuel = JSON.parse(localStorage.getItem('lastFuel') || '{}'); } catch(e) { lastFuel = {}; }
-let lastFuelTs = {};   // коли «останнє паливо» востаннє освіжали з історії (throttle, щоб не спамити flespi)
+let lastFuelTs = {};
+try { lastFuelTs = JSON.parse(localStorage.getItem('lastFuelTs') || '{}'); } catch(e) { lastFuelTs = {}; }   // коли «останнє паливо» востаннє освіжали з історії (throttle, щоб не спамити flespi)
 // Паливо з ПОТОЧНОЇ телеметрії (без кешу). null = заглушене авто рівень не шле.
 function fuelCurrent(dev, tel) {
   const md = (dev && typeof dev === 'object' && dev.metadata) || {};
@@ -239,7 +255,7 @@ function fuelLiters(dev, tel) {
 // Шукаємо останнє >0 серед can.fuel.volume (літри) АБО can.fuel.level (% × бак), пропускаючи нулі-глюки.
 async function lastValidFuel(dev){
   const md = dev.metadata || {};
-  const tank = md.tank || (TANKS[dev.id] && TANKS[dev.id].tank) || null;
+  const tank = md.tank || null;
   const now = Math.floor(Date.now()/1000);
   // fuelByPct = OEM-літри цього авто ненадійні → в історії теж питаємо СПОЧАТКУ відсотки
   // (інакше кеш отруювався некаліброваним volume — та сама регресія, що з плагіном Audi)
@@ -254,7 +270,7 @@ async function lastValidFuel(dev){
           const rawL = (field === 'can.fuel.level') ? (tank ? v/100*tank : null) : v;
           const calL = calFuel(rawL, md);
           const l = calL == null ? null : capFuel(Math.round(calL), tank);
-          if (l != null) { lastFuel[dev.id] = l; lastFuelTs[dev.id] = Date.now(); try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} return l; }
+          if (l != null) { lastFuel[dev.id] = l; lastFuelTs[dev.id] = Date.now(); try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); localStorage.setItem('lastFuelTs', JSON.stringify(lastFuelTs)); } catch(e){} return l; }
         }
       }
     } catch(e){}
@@ -355,16 +371,16 @@ async function pollAutoFaults(devId, cmdId){
   if (_autoPolling[devId]) return;
   _autoPolling[devId] = true;
   try {
-    for (let i = 0; i < 16; i++) {                    // ~12 хв по 45 с — не тисне на ліміт flespi
+    for (let i = 0; i < 4; i++) {                     // 4 спроби по 3 хв: команда й так лежить у черзі 6 год, часто питати нема сенсу
       let res;
       try { res = await api(`/gw/devices/${devId}/commands-result/${cmdId}`); } catch(e){ return; }
       const c = res && res[0];
       if (c && c.executed && c.response) {
-        localStorage.setItem('faults:' + devId, JSON.stringify({ ts: Date.now(), txt: String(c.response).slice(0, 500) }));
+        try { localStorage.setItem('faults:' + devId, JSON.stringify({ ts: Date.now(), txt: String(c.response).slice(0, 500) })); } catch(e){}
         return;
       }
       if (c && c.executed === false) return;          // команда протухла невиконаною — новий цикл поставить свіжу
-      await new Promise(r => setTimeout(r, 45000));
+      await new Promise(r => setTimeout(r, 180000));
     }
   } finally { delete _autoPolling[devId]; }
 }
@@ -587,7 +603,6 @@ const VEH_SVG = {
 function safeColor(c, fallback) { return (typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c)) ? c : fallback; }
 function vehIcon(dev, online, active, gpsLost) {
   const m = dev.metadata || {};
-  const color = m.color || '#3aa0ff';
   const icon = m.icon || '🚗';
   const dim = online ? 1 : 0.55;
   // кантик навколо машинки: БІЛИЙ коли стоїть, ЗЕЛЕНИЙ коли в роботі, ЖОВТИЙ пунктир — GPS втрачено надовго (точка застаріла)
@@ -596,12 +611,12 @@ function vehIcon(dev, online, active, gpsLost) {
   const badge = gpsLost ? '<div style="position:absolute;top:-4px;right:-4px;font-size:12px">⚠️</div>' : '';
   // color/icon — з метаданих flespi → esc обовʼязково (та сама модель загрози, що для імен: XSS = крадіжка токена)
   // metadata.iconSvg — КЛЮЧ зі списку VEH_SVG (не HTML!), тому XSS неможливий навіть з чужих метаданих
-  const drawer = VEH_SVG[m.iconSvg];
+  const drawer = Object.prototype.hasOwnProperty.call(VEH_SVG, m.iconSvg) ? VEH_SVG[m.iconSvg] : null;
   const svg = drawer ? drawer(safeColor(m.color, '#dfe8f2')) : null;
   const sz = svg ? 42 : 32;
   const inner = svg
     ? '<div style="background:#1c2735;border:'+border+';border-radius:50%;width:42px;height:42px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.6)'+glow+'">'+svg+'</div>'
-    : '<div style="background:'+esc(color)+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+esc(icon)+'</div>';
+    : '<div style="background:'+safeColor(m.color,'#3aa0ff')+';border:'+border+';border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;box-shadow:0 2px 6px rgba(0,0,0,.5)'+glow+'">'+esc(icon)+'</div>';
   const html = '<div style="position:relative;opacity:'+dim+'">'+inner+badge+'</div>';
   return L.divIcon({ className:'', html, iconSize:[sz,sz], iconAnchor:[sz/2,sz/2] });
 }
@@ -666,6 +681,7 @@ let _renderFp = '', _renderSkips = 0;
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
   devCache = devs;
+  for (const d of devs) maybeAutoReboot(d, d.telemetry || {});   // лише на СВІЖИХ даних (не з рендера і не зі знімка)
   // знімок останнього успішного стану — щоб при наступному відкритті одразу бачити авто (без спінера й без помилки)
   try { localStorage.setItem('devSnapshot', JSON.stringify({ ts: Date.now(), devs })); } catch(e){}
   // НЕ перемальовуємо, якщо нічого суттєвого не змінилось (стоянка вночі): менше миготіння/зайвого DOM,
@@ -729,18 +745,19 @@ function isActive(dev, tel, online) {
 // ЛИПКІСТЬ: раз авто було активне — лишається «в роботі» ще 4 хв (зглажує світлофори, короткі
 // зупинки й паузи між пакетами даних). Стан у localStorage — переживає авто-перезавантаження.
 const ACTIVE_STICK_MS = 240000;
-let activeSeen = {};
+let activeSeen = {}, _actSaveAt = 0;
 try { activeSeen = JSON.parse(localStorage.getItem('activeSeen') || '{}'); } catch(e) { activeSeen = {}; }
 function displayActive(dev, tel, online) {
   if (isActive(dev, tel, online)) {
     activeSeen[dev.id] = Date.now();
-    try { localStorage.setItem('activeSeen', JSON.stringify(activeSeen)); } catch(e){}
+    if (!_actSaveAt || Date.now() - _actSaveAt > 60000) { _actSaveAt = Date.now(); try { localStorage.setItem('activeSeen', JSON.stringify(activeSeen)); } catch(e){} }   // раз на хвилину, а не 10 разів на цикл
     return true;
   }
   return !!(activeSeen[dev.id] && (Date.now() - activeSeen[dev.id] < ACTIVE_STICK_MS));
 }
 
-function renderCards(devs) {
+function renderCards(devs, enrich) {
+  const doEnrich = enrich !== false;   // рендер зі знімка (при відкритті) НЕ тягне історію — інакше 20+ зайвих запитів у першу секунду
   const list = document.getElementById('list');
   const _st = list.scrollTop;   // перебудова обнуляє прокрутку — повертаємо, щоб список не «стрибав» під пальцем
   list.innerHTML = '';
@@ -772,7 +789,7 @@ function renderCards(devs) {
     if (volt != null) diag.push(`🔋 ${volt.toFixed(1)} В`);
     else { const tb = trkBatt(tel); if (tb != null) diag.push(`🔋 ${Math.round(tb)}% (трекер)`); }
     if (gsm) diag.push(`📶 ${gsm.label}`);
-    if (sats != null) diag.push(`🛰️ ${sats}`);
+    if (sats != null) diag.push(`🛰️ ${esc(sats)}`);
     if (!active) diag.push(`🅿️ <span id="st_${d.id}">…</span>`);   // скільки стоїть (простій) — і для офлайн
     // розрахунковий баланс SIM: постійно у діагностиці, а коли не вистачає на наступне списання — червона тривога
     const se = simEstimate(d.metadata);
@@ -791,7 +808,6 @@ function renderCards(devs) {
     const jam = gnssJamState(tel);
     const blindMs = blindDrivingMs(d.id, tel);   // їде наосліп: акселерометр рухається, твердого фікса нема
     const jamMs = jamDuration(d.id, jam);
-    maybeAutoReboot(d, tel);   // GPS-модуль завис після довгого глушіння → авто-cpureset (див. комент функції)
     // НАЙВАЖЛИВІШЕ попередження: авто ЇДЕ (акселерометр), а твердого фікса нема довше 3 хв —
     // отже точка на карті застаріла і НЕ показує, де авто насправді. Має пріоритет над усім іншим.
     const frozenMs = posFrozenMs(d.id, tel);
@@ -850,6 +866,7 @@ function renderCards(devs) {
       </div>${infoHtml}${diagHtml}${locHtml}${alertHtml}${simHtml}`;
     list.appendChild(card);
 
+    if (!doEnrich) continue;   // знімок при відкритті: малюємо миттєво, історію тягнемо вже зі свіжими даними
     dayMileage(d.id, startOfDay()).then(km => {
       const el = document.getElementById('dm_' + d.id);
       if (el) el.textContent = (km != null ? km + ' км' : '—');
@@ -952,7 +969,10 @@ function renderMap(devs) {
     const html = `<b>${esc(d.name)}</b><br>${status}${liters!=null?' · '+liters+' л':''}${gpsWarn}`;
     if (markers[d.id]) {
       markers[d.id].setLatLng([lat,lon]);
-      markers[d.id].setIcon(vehIcon(d, online, active, gpsLost));   // оновлюємо обідок (завівся / заглушив / GPS втрачено)
+      // іконку перемальовуємо ЛИШЕ коли справді змінився стан: setIcon щоразу знищував і
+      // відтворював DOM маркера (5 авто × кожні 15 с) — помітне гальмо на телефоні
+      const iconKey = online+'|'+active+'|'+gpsLost+'|'+((d.metadata||{}).iconSvg||'')+'|'+((d.metadata||{}).color||'');
+      if (markers[d.id]._iconKey !== iconKey) { markers[d.id].setIcon(vehIcon(d, online, active, gpsLost)); markers[d.id]._iconKey = iconKey; }
       const pp = markers[d.id].getPopup(); if (pp) pp.setContent(html);
     } else {
       markers[d.id] = markerFor(d, [lat,lon], online, active, gpsLost).addTo(map).bindPopup(html);
@@ -1132,6 +1152,11 @@ async function standingText(dev){
 // Кеш у localStorage (між сесіями) + СЕРІЙНА черга (по одному запиту — щоб не ловити ліміт Nominatim і не гальмувати).
 let geoCache = {};
 try { geoCache = JSON.parse(localStorage.getItem('geoCache') || '{}'); } catch(e) { geoCache = {}; }
+{ // єдиний кеш без обмеження: за рік роботи впирався б у квоту, і тоді ТИХО ламалось би все інше
+  const keys = Object.keys(geoCache);
+  if (keys.length > 3000) { for (const k of keys.slice(0, keys.length - 3000)) delete geoCache[k];
+    try { localStorage.setItem('geoCache', JSON.stringify(geoCache)); } catch(e){} }
+}
 let geoQueue = Promise.resolve();
 function geocode(lat, lon){
   if (lat == null || lon == null) return Promise.resolve('');
@@ -1189,6 +1214,7 @@ async function periodReport(id, from, to, isStale) {
   // Інакше трек починався там, де GPS уперше зловив фікс після ночі/глушіння — часто за десятки км
   // від реального місця стоянки (Іван: «машина стояла в Сумах, а трек піймав її під Конотопом»).
   let anchor = null;
+  const anchorP = (async () => {
   try {
     const dA = encodeURIComponent(JSON.stringify({ from: Math.max(0, from - 96*3600), to: from, count: 20, reverse: true,
       filter: 'position.valid=true', fields: 'timestamp,position.latitude,position.longitude,position.valid,position.satellites' }));
@@ -1200,11 +1226,13 @@ async function periodReport(id, from, to, isStale) {
       }
     }
   } catch(e) { /* якір — приємний бонус, без нього звіт лишається чинним */ }
+  })();
 
   // ЯКІР КІНЦЯ: якщо маршрут завершився під глушінням, справжня кінцева точка зʼявляється пізніше —
   // коли авто стало і GPS ожив (припаркований приймач ловить супутники значно краще за рухомий).
   // Для «живого» періоду (сьогодні) не шукаємо — там кінець ще попереду.
   let anchorEnd = null;
+  const anchorEndP = (async () => {
   if (to < Math.floor(Date.now()/1000) - 300) {
     try {
       const dE = encodeURIComponent(JSON.stringify({ from: to, to: to + 96*3600, count: 20,
@@ -1218,6 +1246,7 @@ async function periodReport(id, from, to, isStale) {
       }
     } catch(e) {}
   }
+  })();
 
   const tank = tankFor(id);
   const track = [];
@@ -1278,8 +1307,11 @@ async function periodReport(id, from, to, isStale) {
     // Зверху фізична межа 170 (фургон швидше не їде — усе вище це глюк, навіть із «валідним» фіксом).
     const spCan = m['can.vehicle.speed'], spGps = m['position.speed'];
     let sp = null;
-    if (spCan != null && spCan >= 0 && spCan < 170) sp = spCan;
+    // CAN-нуль при напівживому OBD-лінку раніше перебивав валідну GPS-швидкість: трек рвався
+    // на фальшиві «зупинки», і відрізки руху зникали зі стрічки
+    if (spCan != null && spCan > 0 && spCan < 170) sp = spCan;
     else if (spGps != null && goodFix && spGps < 170) sp = spGps;
+    else if (spCan === 0) sp = 0;
     if (sp != null && sp >= 3) spdS.push([ts, sp]);
 
     // ⚠ ПЕРЕВИЩЕННЯ: епізод = безперервний відрізок, де швидкість трималась вище ліміту авто.
@@ -1308,10 +1340,12 @@ async function periodReport(id, from, to, isStale) {
         const dt = (prevTs != null) ? (ts - prevTs) : 0;
         const kmh = (dt > 0) ? (dm / dt * 3.6) : 0;
         // dt<=0 (буферизовані пачки з однаковим часом) обходив фільтр: стрибок з kmh=0 проходив як «рух»
-        teleport = (dt <= 0) ? (dm > JITTER_M) : (dm > JITTER_M && kmh >= 200);
-        if (dm > JITTER_M && !teleport && goodPrecision) gpsM += dm;   // рух; телепорти, дрижання і неточні фікси (hdop>4) — мимо
+        teleport = (dt <= 0) ? (dm > JITTER_M * 30) : (dm > JITTER_M && kmh >= 200);
+        if (dm > JITTER_M && !teleport && goodPrecision) gpsM += dm;
       }
-      prevPt = pt; prevTs = ts;
+      // ЯКІР рухаємо лише коли крок ЗАРАХОВАНО. Раніше він переставлявся завжди, тому дрібні
+      // кроки (<15 м) не накопичувались, а СТИРАЛИСЬ — і місто на 20 км/г давало 0 км пробігу.
+      if (!prevPt || haversine(prevPt, pt) > JITTER_M) { prevPt = pt; prevTs = ts; }
       // МАЛЮЄМО трек рідше за сирі фікси: при пілінгу 2с GPS-шум (±3-8м) дає зубчасту «розмазану» лінію.
       // Пушимо нову точку лише коли відійшли достатньо від ОСТАННЬОЇ НАМАЛЬОВАНОЇ (не від кожного сирого фіксу),
       // і не телепорт (інакше на карті буде кривий стрибок-лінія через увесь маршрут).
@@ -1342,13 +1376,17 @@ async function periodReport(id, from, to, isStale) {
       flv = (rawVol != null && rawVol > 0) ? calFuel(rawVol, mdR) : null;
       if (flv == null && fpct != null && fpct > 0 && tank) flv = calFuel(fpct/100*tank, mdR);
     }
-    flv = capFuel(flv, tank);
-    if (flv != null && flv > 0 && ts != null) fuelPts.push({ ts, L: flv, sp: (sp == null ? 0 : sp), pt: prevPt });
+    // СТЕЛЮ БАКА тут НЕ застосовуємо — лише відсів явного сміття. Обрізання кожного заміру до
+    // ємності вбивало верхівку заправки: 105−57=48 л замість реальних 54.34 (чек 17.08).
+    if (flv != null && tank && flv > tank * 1.6) flv = null;
+    // швидкість: null (нема ні CAN, ні валідного GPS) — це НЕ нуль, інакше під РЕБ будь-яке
+    // вікно вважалось «машина стояла», і плескіт палива йшов у звіт як заправка
+    if (flv != null && flv > 0 && ts != null) fuelPts.push({ ts, L: flv, sp: (sp == null ? null : sp), pt: prevPt });
 
     // ⚡ ЗАРЯДКА електрички: SoC росте на стоянці. Сесії ближче 30 хв зливаємо в одну (нічна зарядка = одна подія).
     const soc = m['can.vehicle.battery.level'];
     if (soc != null && soc > 0 && soc <= 100) {
-      if (prevSoc != null && soc > prevSoc && (sp == null || sp < 3)) {
+      if (prevSoc != null && soc - prevSoc >= 2 && sp != null && sp < 3) {   // <2% = дрижання датчика; sp=null (РЕБ) — не рахуємо за стоянку
         const dpct = soc - prevSoc;
         // допустимий приріст МАСШТАБУЄТЬСЯ часом між замірами: вночі трекер спить, і зарядка +50%
         // приходить одним стрибком уранці — це не глюк. 40%/год покриває і 7кВт wallbox для Z.E.
@@ -1379,15 +1417,35 @@ async function periodReport(id, from, to, isStale) {
     const median = arr => { const a = arr.slice().sort((x,y)=>x-y); return a[Math.floor(a.length/2)]; };
     const seq = Array.from(bmap.keys()).sort((a,b)=>a-b).map(k => {
       const arr = bmap.get(k), mid = arr[Math.floor(arr.length/2)];
+      // «стояла» = БІЛЬШІСТЬ семплів мають ЯВНУ швидкість <1. Раніше досить було одного семпла
+      // без даних про швидкість (sp=null під РЕБ) — і будь-яке вікно ставало «стоянкою».
+      const known = arr.filter(x => x.sp != null);
       return { ts: mid.ts, L: median(arr.map(x=>x.L)), pt: mid.pt,
-               stopped: arr.some(x => (x.sp || 0) < 1) };   // чи була машина нерухома в цьому вікні
+               stoodAny: known.some(x => x.sp < 1) };   // чи була бодай коротка зупинка у вікні
     });
     if (seq.length) { firstFuel = seq[0].L; lastFuel = seq[seq.length-1].L; }
-    for (let i = 1; i < seq.length; i++) {
-      const d = seq[i].L - seq[i-1].L;
-      const holds = (i + 1 >= seq.length) || (Math.abs(seq[i+1].L - seq[i].L) < Math.abs(d) * 0.5);   // зміна втрималась
-      if (d >= FILL_L && holds && seq[i].stopped) fills.push({ ts: seq[i].ts, l: d, pt: seq[i].pt });
-      else if (-d >= DRAIN_L && holds && seq[i].stopped) drains.push({ ts: seq[i].ts, l: -d, pt: seq[i].pt });
+    // Заправка/злив = СУЦІЛЬНИЙ рух рівня від локального мінімуму до максимуму, а не крок між
+    // двома сусідніми вікнами. Заливання 54 л триває ~10 хв і розтягується на 3 вікна — раніше
+    // у звіт потрапляв лише останній крок (+18 л замість 54).
+    let i = 1;
+    while (i < seq.length) {
+      const dir = Math.sign(seq[i].L - seq[i-1].L);
+      if (dir === 0) { i++; continue; }
+      let j = i;
+      while (j + 1 < seq.length && Math.sign(seq[j+1].L - seq[j].L) === dir) j++;
+      const total = seq[j].L - seq[i-1].L;
+      // ЗАПРАВКА: умови «машина стояла» тут НЕ треба — пальне в баку саме не зʼявляється, а вікно
+      // із заправкою майже завжди містить і відʼїзд від колонки (саме через це заправка на 54 л
+      // раніше не детектувалась зовсім).
+      if (dir > 0 && total >= FILL_L) fills.push({ ts: seq[i].ts, l: total, pt: seq[i].pt });
+      // ЗЛИВ: навпаки, потрібна зупинка — інакше звичайна витрата на ходу рахувалась би як крадіжка.
+      // Плюс перевірка темпу: за час руху стільки просто не згоріло б.
+      else if (dir < 0 && -total >= DRAIN_L) {
+        const mins = Math.max(1, (seq[j].ts - seq[i-1].ts) / 60);
+        const stood = seq.slice(i-1, j+1).some(w => w.stoodAny);
+        if (stood && (-total) / mins > 0.35) drains.push({ ts: seq[i].ts, l: -total, pt: seq[i].pt });   // >21 л/год = не витрата, а злив
+      }
+      i = j + 1;
     }
   }
 
@@ -1404,26 +1462,47 @@ async function periodReport(id, from, to, isStale) {
 
   closeStop(to); // зупинка, що триває досі
 
+  await Promise.all([anchorP, anchorEndP]);   // обидва тягнулись паралельно з розбором повідомлень
   // ділянка від місця стоянки до першого фікса — GPS її не бачив (сон/РЕБ), але авто там реально їхало.
   // Додаємо ПРЯМУ відстань (це нижня оцінка) — лише коли вона фізично правдоподібна.
   if (anchor && track.length) {
     const f0 = track[0];
     const legKm = haversine([anchor[0], anchor[1]], [f0[0], f0[1]]) / 1000;
     const dtH = Math.max(0.02, ((f0[2] || from) - anchor[2]) / 3600);
-    if (legKm > 0.2 && legKm / dtH <= 150) gpsM += legKm * 1000;
-    else if (legKm / dtH > 150) anchor = null;                 // неправдоподібно — не малюємо й не рахуємо
+    if (legKm > 0.2 && dtH <= 6 && legKm / dtH <= 150) gpsM += legKm * 1000;   // ≤6 год: старіший якір дав би сотні фантомних км
+    else if (legKm / dtH > 150) anchor = null;
   }
   if (anchorEnd && track.length) {
     const lp = track[track.length-1];
     const legKm = haversine([lp[0], lp[1]], [anchorEnd[0], anchorEnd[1]]) / 1000;
     const dtH = Math.max(0.02, (anchorEnd[2] - (lp[2] || to)) / 3600);
-    if (legKm > 0.2 && legKm / dtH <= 150) gpsM += legKm * 1000;
+    if (legKm > 0.2 && dtH <= 6 && legKm / dtH <= 150) gpsM += legKm * 1000;
     else if (legKm / dtH > 150) anchorEnd = null;
   }
   // перша зупинка періоду без координат (стояв ще з учора, під РЕБ фікса нема) — беремо місце з якоря
-  if (anchor && stops.length && !stops[0].pt) stops[0].pt = [anchor[0], anchor[1]];
+  if (anchor && stops.length && !stops[0].pt && stops[0].ts - anchor[2] < 1800) stops[0].pt = [anchor[0], anchor[1]];   // інакше зупинка в клієнта підписувалась адресою бази
 
-  const odoKm = await odoKmP;
+  // ПРОБІГ. Раніше бралася різниця «останній мінус перший» — і будь-який скид лічильника
+  // або нульові краї обвалювали добу до останнього шматка (Kangoo: 7 км замість реальних).
+  // Тепер сумуємо ДОДАТНІ прирости вже зібраного масиву — це імунно і до скидів, і до нулів.
+  // odoSrc каже, ЗВІДКИ цифра: CAN-одометр авто (стійкий до РЕБ) чи GNSS трекера (під РЕБ замерзає).
+  const odoEdge = await odoKmP;
+  let odoKm = odoEdge, odoSrc = null;
+  {
+    const src = odoCan.length >= 2 ? odoCan : (odoGnss.length >= 2 ? odoGnss : null);
+    odoSrc = odoCan.length >= 2 ? 'can' : (odoGnss.length >= 2 ? 'gnss' : null);
+    if (src) {
+      let sum = 0;
+      for (let k = 1; k < src.length; k++) {
+        const d = src[k][1] - src[k-1][1];
+        if (d > 0 && d < 300) sum += d;   // >300 км між сусідніми записами = стрибок лічильника, не рух
+      }
+      sum = Math.round(sum);
+      // якщо крайова різниця більша (частина записів не долетіла) — беремо більшу з двох
+      if (odoEdge == null || sum > odoEdge) odoKm = sum;
+    }
+    if (odoKm != null && odoKm <= 0) odoKm = odoEdge;
+  }
   const gpsKm = Math.round(gpsM/1000);
   let filledL = null, drainedL = null, spentL = null;
   if (firstFuel != null && lastFuel != null) {   // firstFuel/lastFuel уже в літрах
@@ -1498,10 +1577,11 @@ async function periodReport(id, from, to, isStale) {
     c.pct = Math.round(c.pct);
   });
 
-  return { odoKm, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec, anchor, anchorEnd, spdLimit, speedings: speedings.slice(0, 100),
+  return { odoKm, odoSrc, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec, anchor, anchorEnd, spdLimit,
+           spdCount: speedings.length, spdSec: speedings.reduce((a,e)=>a+(e.endTs-e.ts),0), speedings: speedings.slice(0, 100),
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
-           track: simplifyTrack(track, TRACK_SIMPLIFY_M), stops };
+           track: simplifyTrack(thinTrack(track), TRACK_SIMPLIFY_M), stops };
 }
 
 // ===== Деталі машини =====
@@ -1529,7 +1609,7 @@ function openDetail(d) {
       <div class="row"><span class="k">🔋 Бортовий акумулятор</span><span class="val">${volt!=null?volt.toFixed(1)+' В'+(voltHealth(volt)?' · '+voltHealth(volt):''):'—'}</span></div>
       <div class="row"><span class="k">🔋 Батарея трекера</span><span class="val">${tb!=null?Math.round(tb)+' %':'—'}</span></div>
       <div class="row"><span class="k">📶 GSM сигнал</span><span class="val">${gsm?gsm.pct+'% · '+gsm.label:'—'}</span></div>
-      <div class="row"><span class="k">🛰️ Супутники (GPS)</span><span class="val">${sats!=null?sats:'—'}</span></div>
+      <div class="row"><span class="k">🛰️ Супутники (GPS)</span><span class="val">${sats!=null?esc(sats):'—'}</span></div>
       <div class="row"><span class="k">🅿️ Стоїть (простій)</span><span class="val" id="dst">…</span></div>
     </div>`;
 
@@ -1551,7 +1631,7 @@ function openDetail(d) {
       : clean ? `<span style="color:#2ecc71">чисто ✅</span>`
       : `<span style="color:var(--dim)">${esc(fc.txt)}</span>`;
     obdRows.push(`<div class="row"><span class="k">🛠️ Авто-перевірка помилок</span><span class="val">${body} <span style="color:var(--dim);font-size:11px">· ${when}</span></span></div>`); })();
-  obdRows.push(`<div class="row"><span class="k">🔍 Живе опитування помилок</span><span class="val"><button class="btn-sm btn" style="padding:7px 12px" onclick="event.stopPropagation();checkFaults(${d.id})">Перевірити</button></span></div>`);
+  obdRows.push(`<div class="row"><span class="k">🔍 Живе опитування помилок</span><span class="val"><button class="btn-sm btn" style="padding:7px 12px" onclick="event.stopPropagation();checkFaults(${Number(d.id)})">Перевірити</button></span></div>`);
   obdRows.push(`<div id="faults_${d.id}" class="muted" style="display:none"></div>`);
   const obdBlock = `<div class="section"><h3>Двигун / OBD</h3>${obdRows.join('')}</div>`;
 
@@ -1569,7 +1649,7 @@ function openDetail(d) {
         <div><div class="big">${odo!=null?Math.round(odo).toLocaleString('uk-UA'):'—'}</div><div class="l" style="color:var(--dim);font-size:12px">одометр, км</div></div>
       </div>
       ${diagBlock}
-      <button class="reboot" onclick="rebootTracker(${d.id})">🔄 Перезавантажити трекер</button>
+      <button class="reboot" onclick="rebootTracker(${Number(d.id)})">🔄 Перезавантажити трекер</button>
     </div>
     ${obdBlock}`;
 
@@ -1676,7 +1756,8 @@ async function loadPeriod(el) {
   catch(e){
     if (seq === _loadSeq && document.getElementById('periodOut')) {
       document.getElementById('periodOut').innerHTML = '<div class="muted">помилка: ' + esc(e.message) + '</div>';
-      const oldMsg = document.getElementById('dMapMsg'); if (oldMsg) oldMsg.remove();   // не лишати підпис від старої вкладки
+      _spdLayers = [];   // скидаємо ДО можливого раннього виходу, інакше тап показував відрізок з ІНШОГО дня
+  const oldMsg = document.getElementById('dMapMsg'); if (oldMsg) oldMsg.remove();   // не лишати підпис від старої вкладки
       drawTrack([], []);                                                                 // і не лишати мертвий сірий прямокутник замість карти
     }
     return;
@@ -1685,10 +1766,12 @@ async function loadPeriod(el) {
   if (seq !== _loadSeq || !curDetail) return;
 
   const f = (v,u)=> v!=null ? v.toLocaleString('uk-UA')+' '+u : '—';
-  const jammed = !r.truncated && (r.odoKm != null && r.odoKm > 2 && r.gpsKm < r.odoKm*0.5);   // при обрізаних даних порівняння некоректне
+  const canOdo = (r.odoSrc === 'can');   // CAN-одометр авто — РЕБ-стійкий; GNSS-одометр трекера під глушінням стоїть
+  const jammed = !r.truncated && canOdo && (r.odoKm != null && r.odoKm > 2 && r.gpsKm < r.odoKm*0.5);   // при обрізаних даних порівняння некоректне
   // показуємо, ЯКІ дати реально покриває звіт — інакше «Місяць» (з 1-го числа, на початку місяця
   // коротший за ковзний «Тиждень») збиває з пантелику: тиждень виходив «більший за місяць»
   const perEnd = Math.min(to, Math.floor(Date.now()/1000));
+  const perEndLbl = (to < Math.floor(Date.now()/1000)) ? perEnd - 1 : perEnd;   // закритий період: підпис по ОСТАННІЙ добі, а не по опівночі наступної
   const dstr = ts => { const d = new Date(ts*1000); return d.getDate() + '.' + String(d.getMonth()+1).padStart(2,'0'); };
   const perDays = Math.max(1, Math.round((perEnd - from) / 86400 * 10) / 10);
   // ===== Зведення «плитками»: 6 головних цифр великими, дрібниці — списком нижче (вибір Івана, v63) =====
@@ -1698,7 +1781,7 @@ async function loadPeriod(el) {
   let per100 = null, normL = null, hotFuel = false;
   if (!md.ev) {
     const jamHole = (r.jamSec || 0) > 300;   // >5 хв критичного глушіння за період
-    const kmC = (r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed && !r.truncated && !jamHole) ? r.gpsKm : null);
+    const kmC = (canOdo && r.odoKm != null && r.odoKm >= 10) ? r.odoKm : ((r.gpsKm != null && r.gpsKm >= 10 && !jammed && !r.truncated && !jamHole) ? r.gpsKm : null);
     if (kmC != null && r.spentL) {
       per100 = Math.round(r.spentL / kmC * 1000) / 10;
       normL = md.kmPerLiter ? Math.round(1000 / md.kmPerLiter) / 10 : null;
@@ -1723,15 +1806,15 @@ async function loadPeriod(el) {
   }
   out.innerHTML = `
     <div class="section">
-      <h3>Зведення · ${dstr(from)}–${dstr(perEnd)} (${perDays} дн)</h3>
+      <h3>Зведення · ${dstr(from)}–${dstr(perEndLbl)} (${perDays} дн)</h3>
       <div class="tiles">${tiles.join('')}</div>
       ${jammed?`<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:0 0 6px">⚠ GPS глушився (РЕБ) — орієнтуйся на одометр</div>`:''}
       ${(() => { const js = r.jamSec || 0; if (js <= 300 || jammed) return '';
-        const noCan = r.odoKm == null;   // авто без CAN-одометра (Ducato): кілометри під глушінням ЗНИКАЮТЬ
+        const noCan = !canOdo;   // без CAN-одометра кілометри під глушінням ЗНИКАЮТЬ
         return `<div class="muted" style="text-align:left;color:var(--yellow);font-size:12px;padding:0 0 6px">🚫 GPS глушився ${fmtDur(js)}${noCan ? ' — частина пробігу НЕ порахована (авто без CAN-одометра), розхід за день не показуємо' : ''}</div>`; })()}
       ${(() => { const sp = r.speedings || []; if (!sp.length) return '';
-        const tot = sp.reduce((a,e)=>a+(e.endTs-e.ts),0), mx = Math.max(...sp.map(e=>e.maxSpd));
-        return `<div class="row"><span class="k">🚀 Перевищень ліміту ${r.spdLimit || 110}</span><span class="val" style="color:var(--red)">${sp.length} · разом ${fmtDur(tot)} · до ${mx} км/г</span></div>`; })()}
+        const tot = r.spdSec || sp.reduce((a,e)=>a+(e.endTs-e.ts),0), mx = Math.max(...sp.map(e=>e.maxSpd));
+        return `<div class="row"><span class="k">🚀 Перевищень ліміту ${r.spdLimit || 110}</span><span class="val" style="color:var(--red)">${r.spdCount || sp.length} · разом ${fmtDur(tot)} · до ${mx} км/г</span></div>`; })()}
       ${!md.ev ? `<div class="row"><span class="k">⛽ Залито</span><span class="val" style="color:var(--green)">${r.filledL!=null?'+'+r.filledL+' л':'—'}</span></div>
       <div class="row"><span class="k">🔴 Злито</span><span class="val" style="color:${r.drainedL?'var(--red)':'inherit'}">${r.drainedL!=null?(r.drainedL?'−'+r.drainedL+' л':'0 л'):'—'}</span></div>` : ''}
       <div class="row"><span class="k">🅿️ Стояв</span><span class="val">${r.standSec ? fmtDur(r.standSec) : '—'}</span></div>
@@ -1801,6 +1884,7 @@ function drawTrack(track, stops, anchor, speedings, anchorEnd) {
   bl['Карта'].addTo(dMap);
   L.control.layers(bl, {}, { position:'topright' }).addTo(dMap);
 
+  _spdLayers = [];   // скидаємо ДО можливого раннього виходу, інакше тап показував відрізок з ІНШОГО дня
   const oldMsg = document.getElementById('dMapMsg');   // карта тепер поза periodOut і живе між вкладками — старе повідомлення прибираємо самі
   if (oldMsg) oldMsg.remove();
   if (!track.length) {
@@ -1832,7 +1916,6 @@ function drawTrack(track, stops, anchor, speedings, anchorEnd) {
   L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(dMap).bindPopup(anchor ? 'Перший GPS-фікс періоду' : 'Старт');
   L.circleMarker(track[track.length-1], { radius:6, color:'#e74c3c', fillColor:'#e74c3c', fillOpacity:1 }).addTo(dMap).bindPopup('Кінець');
   // ⚠ ВІДРІЗКИ ПЕРЕВИЩЕННЯ — червоним поверх синього треку (видно, ДЕ саме водій топив)
-  _spdLayers = [];
   (speedings||[]).forEach((e,i)=>{
     if (!e.pts || e.pts.length < 2) return;
     const ln = L.polyline(e.pts.map(p=>[p[0],p[1]]), { color:'#e74c3c', weight:7, opacity:.95 }).addTo(dMap);
@@ -1907,12 +1990,16 @@ function init() {
   }
   document.getElementById('login').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
+  // перевірка свіжості коду — САМЕ ТУТ, а не у saveToken: інакше для вже залогіненого
+  // телефона вона не запускалась ніколи, і він міг місяцями крутити старий код
+  checkVersion(true);
+  if (!window._verTimer) window._verTimer = setInterval(() => checkVersion(), 600000);
   // МИТТЄВО показуємо останній збережений стан (без спінера, без помилки), поки тягнемо свіжі дані
   try {
     const snap = JSON.parse(localStorage.getItem('devSnapshot') || 'null');
     if (snap && snap.devs && snap.devs.length) {
       devCache = snap.devs;
-      renderCards(snap.devs);
+      renderCards(snap.devs, false);
       renderMap(snap.devs);
       const upd = document.getElementById('updated');
       if (upd) upd.textContent = 'дані від ' + new Date(snap.ts).toLocaleTimeString('uk-UA') + ' · оновлюю…';
@@ -1967,7 +2054,7 @@ async function checkVersion(force){
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
     reg.update();
-    setInterval(() => reg.update(), 60000);   // перевірка оновлень щохвилини
+    setInterval(() => reg.update(), 300000);   // перевірка оновлень щохвилини
   }).catch(()=>{});
   let swReloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
