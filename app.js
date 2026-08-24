@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v89';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v90';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1490,21 +1490,34 @@ async function periodReport(id, from, to, isStale) {
   // Тепер сумуємо ДОДАТНІ прирости вже зібраного масиву — це імунно і до скидів, і до нулів.
   // odoSrc каже, ЗВІДКИ цифра: CAN-одометр авто (стійкий до РЕБ) чи GNSS трекера (під РЕБ замерзає).
   const odoEdge = await odoKmP;
-  let odoKm = odoEdge, odoSrc = null;
+  let odoKm = odoEdge, odoSrc = null, odoSrcArr = null;
   {
-    const src = odoCan.length >= 2 ? odoCan : (odoGnss.length >= 2 ? odoGnss : null);
-    odoSrc = odoCan.length >= 2 ? 'can' : (odoGnss.length >= 2 ? 'gnss' : null);
-    if (src) {
-      let sum = 0;
-      for (let k = 1; k < src.length; k++) {
-        const d = src[k][1] - src[k-1][1];
-        if (d > 0 && d < 300) sum += d;   // >300 км між сусідніми записами = стрибок лічильника, не рух
-      }
-      sum = Math.round(sum);
-      // якщо крайова різниця більша (частина записів не долетіла) — беремо більшу з двох
-      if (odoEdge == null || sum > odoEdge) odoKm = sum;
-    }
-    if (odoKm != null && odoKm <= 0) odoKm = odoEdge;
+    // «СТИК» ІЗ ПОПЕРЕДНЬОЮ ДОБОЮ (odoEdge = останній одометр періоду мінус останній ДО періоду)
+    // чесний лише тоді, коли авто справді їхало у «сліпому» проміжку між добами.
+    // CAN-одометр уміє ЗАМЕРЗАТИ: у Leaf 22.08 за цілу добу прийшло ОДНЕ значення, і стик приписав
+    // неділі 27 фантомних км — 57 замість реальних 30 (баг, який зловив Іван).
+    // Перевірка чесна й дешева: якщо доба почалась ТАМ, де вчора закінчилась, і якір свіжий —
+    // машина нікуди не їздила, отже стикувати нічого.
+    const stitchOk = !(anchor && track.length && (track[0][2] || from) - anchor[2] <= 6*3600
+      && haversine([anchor[0], anchor[1]], [track[0][0], track[0][1]]) < 1000);
+    // ДЖЕРЕЛО ПРОБІГУ: не «CAN завжди головний», а те, що бачило БІЛЬШЕ.
+    // Обидва вміють лише НЕДОРАХОВУВАТИ: CAN випадає, коли OBD не відповідає (у Leaf 21.08 —
+    // 16 значень за добу, частина взагалі 0, дірка 09:28–11:33 з’їла цілу поїздку → 14 км замість 20);
+    // GNSS-одометр трекера замерзає під РЕБ. Тому беремо більший — і жодне джерело не «краде» км.
+    const sumOf = arr => {
+      if (!arr || arr.length < 2) return null;
+      let s = 0;
+      for (let k = 1; k < arr.length; k++) { const d = arr[k][1] - arr[k-1][1]; if (d > 0 && d < 300) s += d; }
+      return Math.round(s);   // >300 км між сусідніми записами = стрибок лічильника, не рух
+    };
+    const sCan = sumOf(odoCan), sGnss = sumOf(odoGnss);
+    let sum = null, src = null;
+    if (sCan != null && (sGnss == null || sCan >= sGnss)) { sum = sCan; src = odoCan; odoSrc = 'can'; }
+    else if (sGnss != null) { sum = sGnss; src = odoGnss; odoSrc = 'gnss'; }
+    odoSrcArr = src;
+    if (!stitchOk) odoKm = sum;                                       // тільки те, що бачили В МЕЖАХ доби
+    else if (sum != null && (odoEdge == null || sum > odoEdge)) odoKm = sum;   // частина записів не долетіла — беремо більше
+    if (odoKm != null && odoKm <= 0 && stitchOk) odoKm = odoEdge;
   }
   const gpsKm = Math.round(gpsM/1000);
   let filledL = null, drainedL = null, spentL = null;
@@ -1515,7 +1528,7 @@ async function periodReport(id, from, to, isStale) {
   }
 
   // ===== ВІДРІЗКИ РУХУ (для стрічки дня): проміжки між зупинками =====
-  const odoS = odoCan.length >= 2 ? odoCan : odoGnss;   // одне джерело на весь період (шкали різні — не мішати!)
+  const odoS = odoSrcArr || odoGnss;   // ТЕ САМЕ джерело, що й пробіг (шкали різні — не мішати!)
   function odoNear(t){   // найближчий семпл одометра до моменту t (в межах 30 хв)
     if (!odoS.length) return null;
     let best = null, bd = 1800;
