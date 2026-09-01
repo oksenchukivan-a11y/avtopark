@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v91';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v92';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1616,17 +1616,27 @@ async function periodReport(id, from, to, isStale) {
   }
   const segments = [];
   const sortedStops = stops.slice().sort((a,b)=>a.ts-b.ts);
-  function addSeg(a, b){
-    if (b - a < 120) return;                     // <2 хв — шумовий проміжок
-    // ЗВУЖУЄМО вікно до реальних свідчень руху (перший/останній замір швидкості ≥3 у вікні) —
-    // інакше ніч без даних між "кінцем доби" і першою зупинкою рахувалась як "їхав 9 годин".
-    let first = null, last = null, mx = 0;
-    for (const s of spdS) {
-      if (s[0] >= a && s[0] <= b) { if (first == null) first = s[0]; last = s[0]; if (s[1] > mx) mx = s[1]; }
+  const SEG_GAP = 600;   // 10 хв без жодного заміру руху = машина стояла (це рівно період «на стоянці» трекера)
+  function addSeg(a0, b0){
+    if (b0 - a0 < 120) return;                   // <2 хв — шумовий проміжок
+    // РІЖЕМО вікно на РЕАЛЬНІ поїздки. Раніше було одне звуження «перший…останній замір швидкості»,
+    // і якщо між ними зяяла ніч без даних (зупинку не розпізнало), уся ніч ішла в «У русі»:
+    // тиждень Leaf показував 3695 хв руху = 61 година за 7 діб (фізично неможливо). Тепер кожна
+    // пауза довша за SEG_GAP розриває відрізок, і в «У русі» лишається тільки справжня їзда.
+    const win = [];
+    for (const s of spdS) if (s[0] >= a0 && s[0] <= b0) win.push(s);
+    if (!win.length) return;                     // жодного заміру руху — це не поїздка
+    let i0 = 0;
+    for (let i = 1; i <= win.length; i++) {
+      if (i < win.length && win[i][0] - win[i-1][0] <= SEG_GAP) continue;
+      pushSeg(win[i0][0], Math.min(b0, win[i-1][0] + 60), win.slice(i0, i));
+      i0 = i;
     }
-    if (first == null) return;                   // жодного заміру руху — це не поїздка
-    a = first; b = Math.min(b, last + 60);
+  }
+  function pushSeg(a, b, win){
     if (b - a < 120) return;
+    let mx = 0;
+    for (const s of win) if (s[1] > mx) mx = s[1];
     const o1 = odoNear(a), o2 = odoNear(b);
     let km = (o1 != null && o2 != null) ? Math.round((o2-o1)*10)/10 : null;
     if (km != null && km > 3000) km = null;      // глюк одометра
@@ -1675,6 +1685,92 @@ async function periodReport(id, from, to, isStale) {
            track: simplifyTrack(thinTrack(track), TRACK_SIMPLIFY_M), stops };
   repPut(id, from, to, rep);
   return rep;
+}
+
+// ===== ДОВГІ ПЕРІОДИ = СУМА ДІБ =====
+// Один запит на тиждень — 20.5 тис. повідомлень і 4.2 МБ, на місяць ≈ 18 МБ: телефон чекав десятки
+// секунд і з'їдав мобільний трафік. Але доба вже рахується окремо для вкладок днів, і межі збігаються
+// ОДИН-В-ОДИН. Тому «Тиждень»/«Місяць» складаємо з ДОБОВИХ звітів: кожна доба тягнеться один раз
+// і лягає в той самий repCache, що й вкладка дня. Переглянув дні — тиждень відкривається миттєво.
+// Бонус: пробіг стає точнішим — доба рахується у своїх межах, без «стику» через опівніч (див. v90).
+function daySpans(from, to){
+  const out = [];
+  let a = from;
+  while (a < to && out.length < 40) {                 // 40 — стеля на випадок дивних меж, місяць ≤ 31
+    const d = new Date(a * 1000);
+    d.setHours(24, 0, 0, 0);                          // наступна МІСЦЕВА опівніч (сам обробляє перехід на літній час)
+    const b = Math.min(Math.floor(d.getTime() / 1000), to);
+    if (b <= a) break;
+    out.push([a, b]);
+    a = b;
+  }
+  return out;
+}
+// Подія, розрізана опівніччю (стоянка з вечора до ранку, поїздка через 00:00), приходить двома
+// шматками — зшиваємо назад, інакше тиждень показував 45 «зупинок» замість 38.
+function joinAtBoundary(arr){
+  const out = [];
+  for (const x of arr) {
+    const prev = out[out.length - 1];
+    if (prev && x.ts - (prev.ts + prev.dur) <= 120) {   // впритул — це одна подія
+      prev.dur = (x.ts + x.dur) - prev.ts;
+      if (x.km != null) prev.km = Math.round(((prev.km || 0) + x.km) * 10) / 10;
+      if (x.maxSpd) prev.maxSpd = Math.max(prev.maxSpd || 0, x.maxSpd);
+    } else out.push(Object.assign({}, x));
+  }
+  return out;
+}
+function mergeReports(parts, incomplete){
+  const ok = parts.filter(Boolean);
+  if (!ok.length) throw new Error('дані за період не завантажились');
+  const sum = f => { let s = null; for (const p of ok) if (p[f] != null) s = (s == null ? 0 : s) + p[f]; return s; };
+  const cat = f => { const a = []; for (const p of ok) if (p[f]) a.push(...p[f]); return a; };
+  const byTs = (a,b) => a.ts - b.ts;
+  // джерело пробігу: те, яким намічено БІЛЬШЕ кілометрів за період (від нього залежить прапорець «⚠ РЕБ»)
+  let canKm = 0, gnssKm = 0;
+  for (const p of ok) if (p.odoKm) { if (p.odoSrc === 'can') canKm += p.odoKm; else if (p.odoSrc === 'gnss') gnssKm += p.odoKm; }
+  const speedings = cat('speedings').sort(byTs);
+  const first = ok[0], last = ok[ok.length - 1];
+  return {
+    odoKm: sum('odoKm'),
+    odoSrc: (canKm > 0 && canKm >= gnssKm) ? 'can' : (gnssKm > 0 ? 'gnss' : null),
+    gpsKm: sum('gpsKm'), filledL: sum('filledL'), spentL: sum('spentL'), drainedL: sum('drainedL'),
+    driveSec: sum('driveSec') || 0, standSec: sum('standSec') || 0,
+    segments: joinAtBoundary(cat('segments').sort(byTs)),
+    maxSpd: ok.reduce((m,p) => Math.max(m, p.maxSpd || 0), 0),
+    truncated: !!incomplete || ok.some(p => p.truncated),
+    charges: cat('charges').sort(byTs),
+    evKwh: sum('evKwh'), evCost: sum('evCost'), jamSec: sum('jamSec') || 0,
+    anchor: first.anchor, anchorEnd: last.anchorEnd, spdLimit: first.spdLimit,
+    spdCount: speedings.length,
+    spdSec: speedings.reduce((a,e) => a + (e.endTs - e.ts), 0),
+    speedings: speedings.slice(0, 100),
+    fills: cat('fills').sort(byTs), drains: cat('drains').sort(byTs),
+    // добові треки вже проріджені; після склеювання згладжуємо ще раз, інакше місяць — це десятки тисяч
+    // точок в одній полілінії (телефон помітно задумується при кожному зумі карти)
+    track: simplifyTrack(cat('track'), TRACK_SIMPLIFY_M),
+    stops: joinAtBoundary(cat('stops').sort(byTs))
+  };
+}
+const RANGE_MAX_DAYS = 8;   // тиждень складаємо з діб; місяць — ні: ~6 запитів × 31 доба = вірний ліміт flespi
+async function periodReportRange(id, from, to, isStale){
+  const spans = daySpans(from, to);
+  if (spans.length <= 1 || spans.length > RANGE_MAX_DAYS) return periodReport(id, from, to, isStale);
+  const hit = repGet(id, from, to);
+  if (hit) return hit;
+  const parts = new Array(spans.length);
+  let next = 0, POOL = Math.min(3, spans.length);   // 3 паралельні доби: швидше за чергу і не б'є в ліміт flespi
+  await Promise.all(Array.from({ length: POOL }, async () => {
+    for (;;) {
+      const k = next++;
+      if (k >= spans.length) return;
+      if (isStale && isStale()) return;             // користувач перемкнув вкладку — решту діб не тягнемо
+      try { parts[k] = await periodReport(id, spans[k][0], spans[k][1], isStale); } catch(e) { parts[k] = null; }
+    }
+  }));
+  const merged = mergeReports(parts, parts.some(p => !p) || (isStale && isStale()));
+  repPut(id, from, to, merged);
+  return merged;
 }
 
 // ===== Деталі машини =====
@@ -1848,7 +1944,7 @@ async function loadPeriod(el) {
   _segHl = null;   // карту НЕ руйнуємо — вона живе між вкладками, drawTrack сам перемалює вміст
 
   let r;
-  try { r = await periodReport(curDetail.id, from, to, () => seq !== _loadSeq); }
+  try { r = await periodReportRange(curDetail.id, from, to, () => seq !== _loadSeq); }
   catch(e){
     if (seq === _loadSeq && document.getElementById('periodOut')) {
       document.getElementById('periodOut').innerHTML = '<div class="muted">помилка: ' + esc(e.message) + '</div>';
