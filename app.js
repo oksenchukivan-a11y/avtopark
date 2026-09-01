@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v90';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v91';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1161,14 +1161,39 @@ try { geoCache = JSON.parse(localStorage.getItem('geoCache') || '{}'); } catch(e
     try { localStorage.setItem('geoCache', JSON.stringify(geoCache)); } catch(e){} }
 }
 let geoQueue = Promise.resolve();
+// ПОШУК «ПОРУЧ»: ключ кешу — 4 знаки (≈11 м), тому та сама стоянка біля дому щодня давала НОВИЙ ключ
+// і новий запит. А черга серійна з паузою під ліміт Nominatim — день із 10 зупинками = 10+ секунд,
+// поки адреси доповзуть. Тепер спершу шукаємо вже відому адресу в радіусі 150 м: для стоянки це та сама
+// вулиця й будинок, а промахів кешу стає в рази менше.
+const GEO_NEAR_M = 150;
+let _geoIdx = null;
+function geoNear(lat, lon){
+  const keys = Object.keys(geoCache);
+  if (!_geoIdx || _geoIdx.n !== keys.length) {
+    _geoIdx = { n: keys.length, arr: keys.map(k => { const q = k.split(','); return [+q[0], +q[1], k]; }) };
+  }
+  let best = null, bd = GEO_NEAR_M;
+  for (const e of _geoIdx.arr) {
+    if (Math.abs(e[0] - lat) > 0.0025 || Math.abs(e[1] - lon) > 0.004) continue;   // дешевий відсів по рамці
+    const d = haversine([lat, lon], [e[0], e[1]]);
+    if (d < bd) { bd = d; best = geoCache[e[2]]; }
+  }
+  return best;
+}
 function geocode(lat, lon){
   if (lat == null || lon == null) return Promise.resolve('');
   const key = lat.toFixed(4) + ',' + lon.toFixed(4);
   if (geoCache[key] !== undefined) return Promise.resolve(geoCache[key]);
+  const near = geoNear(lat, lon);
+  if (near) return Promise.resolve(near);
   geoQueue = geoQueue.then(async () => {
     if (geoCache[key] !== undefined) return;   // могли закешувати, поки стояли в черзі
+    // ТАЙМАУТ обовʼязковий: черга серійна, і одна зависла відповідь Nominatim блокувала
+    // ВСІ наступні адреси до перезавантаження застосунку (адреси просто «не приходили»).
+    const ctl = new AbortController();
+    const tid = setTimeout(() => ctl.abort(), 8000);
     try {
-      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&accept-language=uk&lat=${lat}&lon=${lon}`);
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&accept-language=uk&lat=${lat}&lon=${lon}`, { signal: ctl.signal });
       const j = await r.json();
       const a = j.address || {};
       const road = a.road || a.pedestrian || a.residential || a.suburb || a.neighbourhood || '';
@@ -1178,17 +1203,50 @@ function geocode(lat, lon){
       if (road && place && place !== road) txt = road + num + ', ' + place;
       if (!txt) txt = (j.display_name || '').split(',').slice(0,2).join(',').trim();
       // кешуємо ЛИШЕ вдалий результат — порожнє/помилку не запамʼятовуємо назавжди, спробуємо ще раз наступного разу
-      if (txt) { geoCache[key] = txt; try { localStorage.setItem('geoCache', JSON.stringify(geoCache)); } catch(e){} }
+      if (txt) { geoCache[key] = txt; _geoIdx = null; try { localStorage.setItem('geoCache', JSON.stringify(geoCache)); } catch(e){} }
     } catch(e) { /* помилку не кешуємо — спробуємо іншим разом */ }
-    await new Promise(res => setTimeout(res, 1100));   // пауза під ліміт Nominatim (1/сек)
+    finally { clearTimeout(tid); }
+    await new Promise(res => setTimeout(res, 1000));   // пауза під ліміт Nominatim (1/сек)
   });
   return geoQueue.then(() => geoCache[key] || '');
+}
+
+// ===== КЕШ ГОТОВИХ ЗВІТІВ =====
+// Закритий період (вчора, субота, минулий тиждень) уже НІКОЛИ не зміниться — але кожен тап по вкладці
+// качав усі повідомлення заново: доба Leaf = 405 КБ, тиждень = 4.2 МБ, місяць ≈ 18 МБ (заміряно 01.09).
+// Саме це Іван відчував як «підтормажує». Тепер рахуємо один раз за сеанс.
+// Живий період (сьогодні / ковзний тиждень) НЕ кешуємо — він росте з кожним пакетом.
+const REP_CACHE_MAX = 14;          // ~14 звітів у памʼяті: 7 вкладок днів × 2 авто — типовий сеанс
+const REP_SETTLE_SEC = 6 * 3600;   // доба «застигла»: трекер уже дослав усе, що буферизував офлайн
+let repCache = new Map();          // порядок вставки = LRU
+function repKey(id, from, to){ return id + ':' + from + ':' + to; }
+function repAge(to){
+  const now = Math.floor(Date.now()/1000);
+  if (to >= now - 300) return 60000;                    // ЖИВИЙ період (сьогодні/тиждень): 1 хв — рівно щоб
+                                                        // «туди-сюди по вкладках» не качало 4 МБ повторно
+  if (now - to > REP_SETTLE_SEC) return Infinity;       // доба застигла: трекер дослав усе, перерахунок не змінить нічого
+  return 600000;                                        // щойно закрита доба: 10 хв (можуть долетіти буферизовані записи)
+}
+function repGet(id, from, to){
+  const k = repKey(id, from, to), v = repCache.get(k);
+  if (!v) return null;
+  if (Date.now() - v.at > repAge(to)) { repCache.delete(k); return null; }
+  repCache.delete(k); repCache.set(k, v);   // освіжаємо позицію в LRU
+  return v.rep;
+}
+function repPut(id, from, to, rep){
+  if (!rep || rep.truncated) return;        // обрізаний звіт кешувати не можна — покаже неповні цифри
+  const k = repKey(id, from, to);
+  repCache.delete(k); repCache.set(k, { rep, at: Date.now() });
+  while (repCache.size > REP_CACHE_MAX) repCache.delete(repCache.keys().next().value);
 }
 
 // ===== ЗВЕДЕННЯ ЗА ПЕРІОД (все одним проходом по повідомленнях) =====
 // isStale (опційно) — колбек «результат уже нікому не потрібен»: рве пагінацію, коли користувач
 // перемкнув вкладку/закрив панель, інакше покинутий «Місяць» тягнув до 10×40к запитів у фоні
 async function periodReport(id, from, to, isStale) {
+  const hit = repGet(id, from, to);
+  if (hit) return hit;                       // закритий період уже пораховано — нуль запитів, миттєво
   // 1) одометр — точно і дешево
   const odoKmP = dayMileage(id, from, to);
 
@@ -1310,10 +1368,26 @@ async function periodReport(id, from, to, isStale) {
     // Зверху фізична межа 170 (фургон швидше не їде — усе вище це глюк, навіть із «валідним» фіксом).
     const spCan = m['can.vehicle.speed'], spGps = m['position.speed'];
     let sp = null;
+    // ДОВІРА ДО GPS-ШВИДКОСТІ. Спуф під РЕБ віддає «швидкість» при нерухомій або стрибучій точці:
+    // 31.08 Kangoo Z.E. 36 секунд рапортував 180→143 км/г, маючи координати БАЙТ-У-БАЙТ ті самі,
+    // hdop 37 і 3 супутники. Через це в дні з'являлось фальшиве перевищення і «макс. 143 км/г»
+    // у електрички, яка стільки не їздить. CAN-швидкість (з шини авто) поза підозрою — бреше саме GPS.
+    // Умови: досить супутників, притомний hdop, і точка УЗГОДЖУЄТЬСЯ зі швидкістю — не телепорт і не завмерла.
+    const hdopM = m['position.hdop'];
+    let spdTrust = (sats == null || sats >= 4) && (hdopM == null || hdopM <= MAX_HDOP);
+    if (spdTrust && lat != null && lon != null && prevPt && prevTs != null) {
+      const dmS = haversine(prevPt, [lat, lon]), dtS = ts - prevTs;
+      const impl = dtS > 0 ? dmS / dtS * 3.6 : 0;   // скільки авто НАСПРАВДІ проїхало між фіксами
+      if (dtS > 0 && dtS <= 120 && impl > MAX_JUMP_KMH) spdTrust = false;   // точка телепортувалась — це не рух
+      // Головна перевірка: заявлена швидкість має підтверджуватись переміщенням точки. Спуф 31.08
+      // рапортував 143 км/г, зсуваючи точку лише на 40 м за 5 с (≈29 км/г). Вікно коротке (≤20 с),
+      // бо на довгому проміжку «середня по прямій» законно менша за миттєву (стоянка → розгін).
+      else if (dtS > 0 && dtS <= 20 && (spGps || 0) > 25 && spGps > impl * 2.5 + 15) spdTrust = false;
+    }
     // CAN-нуль при напівживому OBD-лінку раніше перебивав валідну GPS-швидкість: трек рвався
     // на фальшиві «зупинки», і відрізки руху зникали зі стрічки
     if (spCan != null && spCan > 0 && spCan < 170) sp = spCan;
-    else if (spGps != null && goodFix && spGps < 170) sp = spGps;
+    else if (spGps != null && goodFix && spdTrust && spGps < 170) sp = spGps;
     else if (spCan === 0) sp = 0;
     if (sp != null && sp >= 3) spdS.push([ts, sp]);
 
@@ -1515,7 +1589,8 @@ async function periodReport(id, from, to, isStale) {
     if (sCan != null && (sGnss == null || sCan >= sGnss)) { sum = sCan; src = odoCan; odoSrc = 'can'; }
     else if (sGnss != null) { sum = sGnss; src = odoGnss; odoSrc = 'gnss'; }
     odoSrcArr = src;
-    if (!stitchOk) odoKm = sum;                                       // тільки те, що бачили В МЕЖАХ доби
+    if (!stitchOk) odoKm = (sum != null) ? sum : 0;                    // тільки те, що бачили В МЕЖАХ доби;
+                                                                      // авто стояло там само, де вчора → чесний 0, а не «—»
     else if (sum != null && (odoEdge == null || sum > odoEdge)) odoKm = sum;   // частина записів не долетіла — беремо більше
     if (odoKm != null && odoKm <= 0 && stitchOk) odoKm = odoEdge;
   }
@@ -1593,11 +1668,13 @@ async function periodReport(id, from, to, isStale) {
     c.pct = Math.round(c.pct);
   });
 
-  return { odoKm, odoSrc, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec, anchor, anchorEnd, spdLimit,
+  const rep = { odoKm, odoSrc, gpsKm, filledL, spentL, drainedL, driveSec, standSec, segments, maxSpd, truncated, charges, evKwh, evCost, jamSec, anchor, anchorEnd, spdLimit,
            spdCount: speedings.length, spdSec: speedings.reduce((a,e)=>a+(e.endTs-e.ts),0), speedings: speedings.slice(0, 100),
            fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(thinTrack(track), TRACK_SIMPLIFY_M), stops };
+  repPut(id, from, to, rep);
+  return rep;
 }
 
 // ===== Деталі машини =====
@@ -1698,11 +1775,14 @@ function dayTabsHtml(){
 }
 function periodRange(p){
   const now = Math.floor(Date.now()/1000);
+  // Правий край ЖИВОГО періоду округлюємо до хвилини. Інакше «Сьогодні»/«Тиждень»/«Місяць» щоразу
+  // мали НОВИЙ ключ і не потрапляли в кеш узагалі — тиждень (4.2 МБ) качався заново на кожен тап.
+  const nowQ = now - (now % 60);
   const dm = /^d(\d+)$/.exec(p);
-  if (dm) { const i = +dm[1]; const t0 = dayStartTs(i); return [t0, i === 0 ? now : dayStartTs(i-1)]; }
-  if (p === 'week') { const now5 = now - (now % 300); return [now5 - 7*86400, now]; }   // from кратний 5 хв: стабільний ключ кешу dayMileage
+  if (dm) { const i = +dm[1]; const t0 = dayStartTs(i); return [t0, i === 0 ? nowQ : dayStartTs(i-1)]; }
+  if (p === 'week') return [dayStartTs(6), nowQ];   // рівно 7 вкладок днів; межа доби = стабільний ключ кешу
   const d = new Date(); d.setDate(1); d.setHours(0,0,0,0);
-  return [Math.floor(d/1000), now];
+  return [Math.floor(d/1000), nowQ];
 }
 // ⛶ карта на весь екран і назад (як у Wialon): перемикаємо клас, Leaflet перераховує розмір
 function toggleMapFull(){
@@ -1750,7 +1830,7 @@ function focusSeg(si){
   const pts = (_dRep.track || []).filter(p => p[2] != null && p[2] >= t0 && p[2] <= t1);
   if (pts.length < 2) return;                      // під РЕБ шматка треку може не бути — тоді нічого не міняємо
   if (_segHl) { dMap.removeLayer(_segHl); _segHl = null; }
-  _segHl = L.polyline(pts.map(p=>[p[0],p[1]]), { color:'#f39c12', weight:6, opacity:.95 }).addTo(dMap);
+  _segHl = L.polyline(pts.map(p=>[p[0],p[1]]), { color:'#f39c12', weight:6, opacity:.95 }).addTo(dMap._ov || dMap);
   _segHl.bindPopup(`${s.km != null ? s.km + ' км · ' : ''}${fmtDur(s.dur)}${s.maxSpd ? ' · до ' + s.maxSpd + ' км/г' : ''}`);
   scrollToMap();
   setTimeout(()=>{ if (dMap && _segHl) { dMap.invalidateSize(); dMap.fitBounds(_segHl.getBounds(), { padding:[30,30] }); } }, 350);   // _segHl міг зникнути (тап по зупинці за ці 350 мс)
@@ -1765,7 +1845,7 @@ async function loadPeriod(el) {
   const [from, to] = periodRange(p);
   const out = document.getElementById('periodOut');
   out.innerHTML = '<div class="spinner">рахую…</div>';
-  if (dMap) { dMap.remove(); dMap = null; } _segHl = null;
+  _segHl = null;   // карту НЕ руйнуємо — вона живе між вкладками, drawTrack сам перемалює вміст
 
   let r;
   try { r = await periodReport(curDetail.id, from, to, () => seq !== _loadSeq); }
@@ -1843,7 +1923,9 @@ async function loadPeriod(el) {
       <div id="tlOut"><div class="muted">…</div></div>
     </div>`;
 
-  // мапа треку
+  // мапа треку. У try — бо збій ТУТ мовчки лишав панель напівживою: зведення на екрані є,
+  // а стрічка порожня і тапи не працюють (саме так виглядав баг, який я сам і зробив у v91).
+  try {
   drawTrack(r.track, r.stops, r.anchor, r.speedings, r.anchorEnd);
 
   // ===== СТРІЧКА ДНЯ: зупинки + відрізки руху + заправки/зливи, хронологічно, тап → місце на карті =====
@@ -1890,15 +1972,29 @@ async function loadPeriod(el) {
       }).catch(()=>{});
     });
   }
+  } catch(e) {
+    const tl = document.getElementById('tlOut');
+    if (tl) tl.innerHTML = '<div class="muted">стрічку побудувати не вдалося: ' + esc(e.message) + '</div>';
+  }
 }
 
 function drawTrack(track, stops, anchor, speedings, anchorEnd) {
   const el = document.getElementById('dMap');
   if (!el) return;
-  dMap = L.map(el, { zoomControl:true, attributionControl:false });
-  const bl = baseLayers();
-  bl['Карта'].addTo(dMap);
-  L.control.layers(bl, {}, { position:'topright' }).addTo(dMap);
+  // КАРТУ НЕ ПЕРЕСТВОРЮЄМО на кожній вкладці: L.map() щоразу піднімав новий інстанс, новий шар тайлів
+  // і новий контрол шарів — тобто повторне завантаження плиток і помітний ривок на телефоні.
+  // Тримаємо ОДИН інстанс на весь час, поки відкрите авто, і чистимо лише накладені шари.
+  if (dMap && dMap._container !== el) { try { dMap.remove(); } catch(e){} dMap = null; }
+  if (!dMap) {
+    dMap = L.map(el, { zoomControl:true, attributionControl:false });
+    const bl = baseLayers();
+    bl['Карта'].addTo(dMap);
+    L.control.layers(bl, {}, { position:'topright' }).addTo(dMap);
+    dMap._ov = L.layerGroup().addTo(dMap);   // сюди кладемо ВСЕ змінне: трек, зупинки, перевищення
+  }
+  const ov = dMap._ov;
+  ov.clearLayers();
+  _segHl = null;   // підсвітку відрізка теж змело clearLayers — не тримаємо мертве посилання
 
   _spdLayers = [];   // скидаємо ДО можливого раннього виходу, інакше тап показував відрізок з ІНШОГО дня
   const oldMsg = document.getElementById('dMapMsg');   // карта тепер поза periodOut і живе між вкладками — старе повідомлення прибираємо самі
@@ -1908,33 +2004,33 @@ function drawTrack(track, stops, anchor, speedings, anchorEnd) {
     el.insertAdjacentHTML('afterend','<div class="muted" id="dMapMsg" style="margin-top:8px">за період треку немає</div>');
     return;
   }
-  const line = L.polyline(track.map(p=>[p[0],p[1]]), { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(dMap);
+  const line = L.polyline(track.map(p=>[p[0],p[1]]), { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(ov);
   const fitPts = track.map(p=>[p[0],p[1]]);
   // ЯКІР: де авто стояло на початок періоду + пунктир до першого фікса (ділянка, яку GPS не бачив)
   if (anchor) {
     const a = [anchor[0], anchor[1]];
     L.polyline([a, [track[0][0], track[0][1]]], { color:'#f39c12', weight:3, opacity:.85, dashArray:'9,7' })
-      .addTo(dMap).bindPopup('GPS не писав цю ділянку (сон трекера / РЕБ) — показано напрямок від місця стоянки');
+      .addTo(ov).bindPopup('GPS не писав цю ділянку (сон трекера / РЕБ) — показано напрямок від місця стоянки');
     L.circleMarker(a, { radius:7, color:'#f39c12', fillColor:'#f39c12', fillOpacity:1 })
-      .addTo(dMap).bindPopup('🅿️ Тут стояла на початок періоду');
+      .addTo(ov).bindPopup('🅿️ Тут стояла на початок періоду');
     fitPts.push(a);
   }
   // ЯКІР КІНЦЯ: куди авто доїхало насправді (перший фікс після завершення періоду)
   if (anchorEnd) {
     const e = [anchorEnd[0], anchorEnd[1]];
     L.polyline([[track[track.length-1][0], track[track.length-1][1]], e], { color:'#f39c12', weight:3, opacity:.85, dashArray:'9,7' })
-      .addTo(dMap).bindPopup('GPS не писав цю ділянку — точка, де авто знайшлося після зупинки');
+      .addTo(ov).bindPopup('GPS не писав цю ділянку — точка, де авто знайшлося після зупинки');
     L.circleMarker(e, { radius:7, color:'#f39c12', fillColor:'#f39c12', fillOpacity:1 })
-      .addTo(dMap).bindPopup('🏁 Тут авто знайшлося після завершення маршруту');
+      .addTo(ov).bindPopup('🏁 Тут авто знайшлося після завершення маршруту');
     fitPts.push(e);
   }
   // старт / фініш
-  L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(dMap).bindPopup(anchor ? 'Перший GPS-фікс періоду' : 'Старт');
-  L.circleMarker(track[track.length-1], { radius:6, color:'#e74c3c', fillColor:'#e74c3c', fillOpacity:1 }).addTo(dMap).bindPopup('Кінець');
+  L.circleMarker(track[0], { radius:6, color:'#2ecc71', fillColor:'#2ecc71', fillOpacity:1 }).addTo(ov).bindPopup(anchor ? 'Перший GPS-фікс періоду' : 'Старт');
+  L.circleMarker(track[track.length-1], { radius:6, color:'#e74c3c', fillColor:'#e74c3c', fillOpacity:1 }).addTo(ov).bindPopup('Кінець');
   // ⚠ ВІДРІЗКИ ПЕРЕВИЩЕННЯ — червоним поверх синього треку (видно, ДЕ саме водій топив)
   (speedings||[]).forEach((e,i)=>{
     if (!e.pts || e.pts.length < 2) return;
-    const ln = L.polyline(e.pts.map(p=>[p[0],p[1]]), { color:'#e74c3c', weight:7, opacity:.95 }).addTo(dMap);
+    const ln = L.polyline(e.pts.map(p=>[p[0],p[1]]), { color:'#e74c3c', weight:7, opacity:.95 }).addTo(ov);
     ln.bindPopup(`🚀 <b>до ${e.maxSpd} км/г</b><br>${fmtTime(e.ts)}–${fmtTime(e.endTs)} · ${fmtDur(e.endTs - e.ts)}`);
     _spdLayers[i] = ln;
     // ПІДПИСИ ШВИДКОСТІ прямо на лінії: завжди в точці максимуму, а на довгих відрізках — ще дві
@@ -1949,7 +2045,7 @@ function drawTrack(track, stops, anchor, speedings, anchorEnd) {
         const pt = withSp[k];
         if (!pt) continue;
         L.marker([pt[0], pt[1]], { icon: L.divIcon({ className:'', iconSize:[0,0],
-          html:`<div class="spd-lbl${k===mi?' mx':''}">${pt[2]}</div>` }), interactive:false, zIndexOffset:900 }).addTo(dMap);
+          html:`<div class="spd-lbl${k===mi?' mx':''}">${pt[2]}</div>` }), interactive:false, zIndexOffset:900 }).addTo(ov);
       }
     }
   });
@@ -1957,7 +2053,7 @@ function drawTrack(track, stops, anchor, speedings, anchorEnd) {
   stops.forEach((s,i)=>{
     if (!s.pt) return;
     const icon = L.divIcon({ className:'', html:`<div style="background:#f1c40f;color:#000;border:2px solid #fff;border-radius:50%;width:24px;height:24px;line-height:20px;text-align:center;font-weight:700;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.5)">${i+1}</div>`, iconSize:[24,24], iconAnchor:[12,12] });
-    L.marker(s.pt, { icon }).addTo(dMap).bindPopup(`Зупинка №${i+1}<br>${fmtDur(s.dur)}<br>${fmtDateTime(s.ts)}`);
+    L.marker(s.pt, { icon }).addTo(ov).bindPopup(`Зупинка №${i+1}<br>${fmtDur(s.dur)}<br>${fmtDateTime(s.ts)}`);
   });
   setTimeout(()=>{ dMap.invalidateSize(); dMap.fitBounds(L.latLngBounds(fitPts), { padding:[30,30] }); }, 100);
 }
