@@ -2,7 +2,7 @@
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v92';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v93';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -239,15 +239,32 @@ function fuelCurrent(dev, tel) {
   return null;
 }
 // Для відображення: поточне значення, інакше останнє відоме (кеш освіжається з історії в renderCards).
+// НА ХОДУ поплавок у баку плескається, і сира цифра стрибає на десятки відсотків, тому їдучи показуємо
+// останнє «спокійне» значення. АЛЕ раніше на ходу кеш НЕ оновлювався взагалі — заправку було видно лише
+// після зупинки із заведеним двигуном, тобто через години (Іван: «Master зелений 27 л, а у вкладці
+// залито 78»). Тепер на ходу тримаємо коротку медіану живих замірів: плескання вона гасить, а стійкий
+// стрибок на ≥FUEL_ADOPT_L (заправка) пропускає за ~1–2 хв їзди.
+const FUEL_ROLL_N = 5, FUEL_ADOPT_L = 15;   // 15 л: плескання поплавка Master (бак 105) у медіані стільки не дає, заправка — завжди більше
+let _fuelRoll = {};
 function fuelLiters(dev, tel) {
   const id = dev && dev.id;
   const live = fuelCurrent(dev, tel);
-  // НА ХОДУ показуємо останнє «спокійне» значення: поплавок у баку плескається, і сира цифра
-  // стрибає на десятки відсотків (Volvo XC40: 8..97% за добу). Довіряємо датчику лише коли авто стоїть.
   const spNow = tv(tel,'position.speed'), mvNow = tv(tel,'movement.status');
   const moving = (spNow != null && spNow >= 3) || mvNow === true;
-  if (moving && id && lastFuel[id] != null) return lastFuel[id];
+  if (moving && id && lastFuel[id] != null) {
+    if (live != null && live > 0) {
+      const roll = (_fuelRoll[id] = _fuelRoll[id] || []);
+      const stamp = tv(tel,'server.timestamp') || 0;   // той самий пакет телеметрії не рахуємо двічі (рендер частіший за пакети на стоянці)
+      if (!roll.length || roll[roll.length-1][0] !== stamp) { roll.push([stamp, live]); if (roll.length > FUEL_ROLL_N) roll.shift(); }
+      if (roll.length >= 3) {
+        const med = roll.map(x => x[1]).sort((a,b) => a-b)[Math.floor(roll.length/2)];
+        if (Math.abs(med - lastFuel[id]) >= FUEL_ADOPT_L) { lastFuel[id] = med; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} }
+      }
+    }
+    return lastFuel[id];
+  }
   if (live != null && live > 0) {
+    if (id) _fuelRoll[id] = [];   // стоїмо — далі віримо датчику напряму, медіану починаємо заново
     if (id && lastFuel[id] !== live) { lastFuel[id] = live; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} }   // пишемо лише зміну
     return live;
   }
@@ -2100,7 +2117,7 @@ function drawTrack(track, stops, anchor, speedings, anchorEnd) {
     el.insertAdjacentHTML('afterend','<div class="muted" id="dMapMsg" style="margin-top:8px">за період треку немає</div>');
     return;
   }
-  const line = L.polyline(track.map(p=>[p[0],p[1]]), { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(ov);
+  L.polyline(track.map(p=>[p[0],p[1]]), { color:'#3aa0ff', weight:4, opacity:.85 }).addTo(ov);
   const fitPts = track.map(p=>[p[0],p[1]]);
   // ЯКІР: де авто стояло на початок періоду + пунктир до першого фікса (ділянка, яку GPS не бачив)
   if (anchor) {
