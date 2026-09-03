@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "export PYTHONIOENCODING=utf-8 LC_ALL=en_US.UTF-8 PATH=/opt/homebrew/bin:$PATH; f=$(python3 -c \"import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))\"); case \"$f\" in *app.js|*sw.js) d=$(dirname \"$f\"); b=$(basename \"$f\"); /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc \"$f\" 2>&1 | grep -v 'navigator\\|global code@' | head -5; (cd \"$d\" && eslint \"$b\" 2>&1 | tail -15) ;; esac; exit 0"
+            "command": "export PYTHONIOENCODING=utf-8 LC_ALL=en_US.UTF-8 PATH=/opt/homebrew/bin:$PATH; f=$(python3 -c \"import json,sys; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))\"); case \"$f\" in *app.js|*sw.js) d=$(dirname \"$f\"); b=$(basename \"$f\"); cd \"$d\" && /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc \"$b\" 2>&1 | grep -v 'navigator\\|global code@' | head -5; eslint \"$b\" 2>&1 | tail -15 ;; esac; exit 0"
           }
         ]
       }
