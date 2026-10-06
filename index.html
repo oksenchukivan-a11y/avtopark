@@ -7,9 +7,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Автопарк</title>
-<!-- Захист токена: навіть якщо кудись просочиться чужий HTML, браузер не дасть відправити дані
-     нікуди, крім flespi та геокодера — connect-src це забороняє. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://unpkg.com 'unsafe-inline'; style-src 'self' https://unpkg.com 'unsafe-inline'; img-src 'self' data: https://*.google.com https://*.googleapis.com https://*.tile.openstreetmap.org; font-src 'self'; connect-src 'self' https://flespi.io https://nominatim.openstreetmap.org; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
+<!-- Захист токена — ДОДАТКОВИЙ шар, не гарантія: esc() у кожному innerHTML лишається обовʼязковим.
+     script-src БЕЗ 'unsafe-inline' (усі кнопки — через data-act і один обробник в app.js): чужий HTML з
+     inline-обробником (img onerror тощо) не виконається. connect-src — лише flespi та геокодер; скрипт і стилі Leaflet — точні шляхи
+     unpkg, тайли — лише Google mt0–3 і OSM. Але дозволений flespi.io лишається: якщо код таки виконається,
+     токен можна вжити проти самого flespi — тому в застосунку краще тримати токен з обмеженими правами. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://unpkg.com/leaflet@1.9.4/dist/leaflet.js; style-src 'self' https://unpkg.com/leaflet@1.9.4/dist/leaflet.css 'unsafe-inline'; img-src 'self' data: https://mt0.google.com https://mt1.google.com https://mt2.google.com https://mt3.google.com https://*.tile.openstreetmap.org; font-src 'self'; connect-src 'self' https://flespi.io https://nominatim.openstreetmap.org; manifest-src 'self'; worker-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -64,6 +67,12 @@
   .mapwrap.mapfs .mapfull { top:calc(10px + env(safe-area-inset-top)); left:calc(10px + env(safe-area-inset-left)); }
   .leaflet-control-layers { background:var(--card) !important; color:var(--txt); border:1px solid var(--line) !important; }
   .leaflet-control-layers-expanded { padding:8px 10px; }
+  /* значок перемикача шарів: штатний layers.png Leaflet тягнеться з unpkg, а CSP (img-src) його блокує —
+     у кутку мапи був порожній темний квадрат. Вбудований світлий SVG (data: дозволено): видно на темному тлі,
+     працює офлайн. !important — щоб перебити retina-правило з leaflet.css */
+  .leaflet-control-layers .leaflet-control-layers-toggle {
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8eef5' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M12 3 2 8l10 5 10-5z'/%3E%3Cpath d='m2 13 10 5 10-5'/%3E%3C/svg%3E") !important;
+    background-size:24px 24px !important; background-position:center; background-repeat:no-repeat; }
   .reboot { margin-top:14px; width:100%; padding:12px; border-radius:10px; border:1px solid var(--line);
     background:var(--card2); color:var(--txt); font-size:14px; font-weight:600; cursor:pointer; }
   .reboot:active { opacity:.7; }
@@ -149,7 +158,7 @@
   <h1>🚚 Автопарк</h1>
   <p>Встав свій <b>flespi-токен</b> один раз — застосунок запам'ятає його і більше не питатиме.</p>
   <input id="tokenInput" type="password" autocomplete="off" placeholder="flespi token" autocapitalize="off" autocorrect="off" spellcheck="false">
-  <button class="btn" onclick="saveToken()">Увійти</button>
+  <button class="btn" data-act="login">Увійти</button>
   <p style="font-size:12px">Токен зберігається лише на цьому телефоні й надсилається тільки на flespi.io.</p>
 </div>
 
@@ -158,8 +167,8 @@
   <header>
     <h1>Автопарк</h1>
     <span id="updated"></span>
-    <button class="icon" onclick="refresh()" title="Оновити">⟳</button>
-    <button class="icon" onclick="logout()" title="Вийти">⎋</button>
+    <button class="icon" data-act="refresh" title="Оновити">⟳</button>
+    <button class="icon" data-act="logout" title="Вийти">⎋</button>
   </header>
   <div id="map"></div>
   <div id="list"><div class="spinner">Завантаження…</div></div>
@@ -168,7 +177,7 @@
 <!-- ДЕТАЛІ МАШИНИ -->
 <div id="detail">
   <header>
-    <button class="icon" onclick="closeDetail()">‹</button>
+    <button class="icon" data-act="close">‹</button>
     <h1 id="dName">—</h1>
   </header>
   <div class="body" id="dBody"></div>

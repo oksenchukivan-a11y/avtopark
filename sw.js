@@ -1,7 +1,7 @@
 // Service worker — застосунок ставиться як додаток і працює офлайн.
 // Стратегія: код (html/js) — мережа-перша (оновлення видно одразу), статика — кеш-перша.
 // API flespi НЕ кешуємо — дані завжди свіжі.
-const CACHE = 'avtopark-v93';
+const CACHE = 'avtopark-v94';
 const SHELL_LOCAL = [
   './',
   './index.html',
@@ -18,9 +18,11 @@ const SHELL_CDN = [
 self.addEventListener('install', e => {
   // addAll атомарний: недоступний unpkg раніше валив УСТАНОВКУ ЦІЛКОМ (новий SW не активувався,
   // старий код жив у кеші далі). Локальна оболонка — обовʼязкова, CDN — як вийде.
+  // cache:'reload' — повз HTTP-кеш браузера: GitHub Pages віддає файли з max-age=600, і новий SW
+  // інакше міг покласти у свій кеш СТАРИЙ app.js (а застосунок — крутити його ще до 10 хв).
   e.waitUntil(
     caches.open(CACHE).then(c =>
-      c.addAll(SHELL_LOCAL).then(() =>
+      c.addAll(SHELL_LOCAL.map(u => new Request(u, { cache: 'reload' }))).then(() =>
         Promise.allSettled(SHELL_CDN.map(u => c.add(u)))
       )
     ).then(() => self.skipWaiting())
