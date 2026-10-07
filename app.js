@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v95';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v96';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -684,6 +684,54 @@ async function autoReboot(id, byJam){
 }
 // що писати на картці про ребут — лише правду: раніше «перезавантажую трекер» висіло з 2-ї хвилини,
 // хоча автоматика ставить cpureset лише через 20 хв і поза 12-год кулдауном
+// ===== ЗАВИСЛИЙ ФІКС після глушіння (07.10.2026, Master 9216) =====
+// 14:51–15:02 РЕБ під Сумами, авто проїхало ще 14 км, а з 15:14 трекер рапортує valid=true і 13 супутників
+// з БАЙТ-У-БАЙТ тією самою точкою, що перед глушінням. «Їде наосліп» цього не бачить (фікс же «є»), а на
+// стоянці й поготів — тому точка висіла на трасі, хоча авто було в Сумах. Доказ зависання: точка та сама,
+// а CAN-одометр за цей час виріс на ≥STUCK_FIX_KM, причому ПОСТУПОВО і з запалюванням/рухом (не одним
+// стрибком на стоянці — так «розмерзається» CAN-одометр Leaf, і це не зависання GPS).
+const STUCK_FIX_KM = 2, STUCK_CHECK_MS = 15 * 60000;
+const stuckFix = {}, _stuckAt = {};   // stuckFix[id] = { km, k } — поточний вердикт; _stuckAt — коли востаннє перевіряли
+function stuckFromHistory(msgs){   // msgs — від НОВІШОГО до старішого (reverse:true)
+  const key = m => (m['position.latitude'] == null || m['position.longitude'] == null) ? null
+    : m['position.latitude'].toFixed(6) + ',' + m['position.longitude'].toFixed(6);
+  const k0 = msgs.length ? key(msgs[0]) : null;
+  if (!k0) return null;
+  let odoNow = null, odoStart = null, live = 0;
+  const odos = new Set();
+  for (const m of msgs) {
+    const od = m['can.vehicle.mileage'];
+    if (key(m) !== k0) { if (od > 0 && odoStart == null) odoStart = od; break; }   // перший запис ДО появи точки
+    if (od > 0) { if (odoNow == null) odoNow = od; odoStart = od; odos.add(od); }
+    if (m['engine.ignition.status'] === true || m['movement.status'] === true) live++;
+  }
+  if (odoNow == null || odoStart == null) return null;
+  const km = odoNow - odoStart;
+  return (km >= STUCK_FIX_KM && km < 1500 && odos.size >= 3 && live >= 3) ? { km: Math.round(km), k: k0 } : null;
+}
+async function checkStuckFix(d){
+  const tel = d.telemetry || {};
+  if (!fixQuality(tel).solid || !(tv(tel,'can.vehicle.mileage') > 0)) { delete stuckFix[d.id]; return; }   // нема «твердого» фікса — інші тривоги
+  const k = tv(tel,'position.latitude').toFixed(6) + ',' + tv(tel,'position.longitude').toFixed(6);
+  if (stuckFix[d.id] && stuckFix[d.id].k !== k) delete stuckFix[d.id];   // точка зрушила — модуль ожив
+  if (Date.now() - (_stuckAt[d.id] || 0) < STUCK_CHECK_MS) return;
+  _stuckAt[d.id] = Date.now();
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const q = encodeURIComponent(JSON.stringify({ from: now - 12 * 3600, to: now, count: 400, reverse: true,
+      fields: 'timestamp,position.latitude,position.longitude,can.vehicle.mileage,engine.ignition.status,movement.status' }));
+    const v = stuckFromHistory((await api(`/gw/devices/${d.id}/messages?data=${q}`)) || []);
+    if (v && v.k === k) {
+      stuckFix[d.id] = v;
+      // лікування — те саме перезавантаження, що й для «наосліп», з тим самим 12-год кулдауном і перевіркою черги.
+      // Трекер може спати (авто заглушене) — команда чекає в черзі й виконається при пробудженні (07.10: за ~4 хв).
+      if (Date.now() - (autoRebootAt[d.id] || 0) >= AUTO_REBOOT_COOLDOWN_MS && !_rbBusy[d.id]) {
+        _rbBusy[d.id] = true;
+        autoReboot(d.id, false).finally(() => { delete _rbBusy[d.id]; });
+      }
+    } else delete stuckFix[d.id];
+  } catch(e) { _stuckAt[d.id] = Date.now() - STUCK_CHECK_MS + 2 * 60000; }   // збій — повтор за 2 хв, не на кожному рендері
+}
 function rebootNote(id, blindMs){
   const at = autoRebootAt[id] || 0, ago = Date.now() - at;
   if (ago < 30*60000) return 'перезавантаження надіслано о ' + fmtTime(at/1000);
@@ -867,7 +915,8 @@ let _renderFp = '', _renderSkips = 0;
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
   devCache = devs;
-  for (const d of devs) maybeAutoReboot(d, d.telemetry || {});   // лише на СВІЖИХ даних (не з рендера і не зі знімка)
+  for (const d of devs) maybeAutoReboot(d, d.telemetry || {});
+  for (const d of devs) checkStuckFix(d);   // завислий «твердий» фікс — раз на 15 хв на авто, 1 легкий запит   // лише на СВІЖИХ даних (не з рендера і не зі знімка)
   // знімок останнього успішного стану — щоб при наступному відкритті одразу бачити авто (без спінера й без помилки)
   try { localStorage.setItem('devSnapshot', JSON.stringify({ ts: Date.now(), devs })); } catch(e){}
   // НЕ перемальовуємо, якщо нічого суттєвого не змінилось (стоянка вночі): менше миготіння/зайвого DOM,
@@ -1016,7 +1065,10 @@ function renderCards(devs, enrich) {
     // Лише для трекера НА ЗВʼЯЗКУ: у офлайн-трекера «рух» — застиглий останній пакет, а не правда.
     const frozenMs = posFrozenMs(d.id, tel);
     const frozenC = frozenMs > 120000 && !!(posSeen[d.id] && posSeen[d.id].mv);   // той самий предикат, що в blindDrivingMs
-    const locHtml = (online && blindMs > 180000)
+    const sf = stuckFix[d.id];
+    const locHtml = sf
+      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">🧊 Завис GPS-модуль: авто проїхало ${sf.km} км, а точка стоїть на місці — ${(Date.now() - (autoRebootAt[d.id] || 0) < 30*60000) ? 'перезавантаження надіслано о ' + fmtTime((autoRebootAt[d.id] || 0)/1000) : (Date.now() - (autoRebootAt[d.id] || 0) < AUTO_REBOOT_COOLDOWN_MS ? 'перевір трекер (кнопка — у деталях)' : 'перезавантажую трекер')}</div>`
+      : (online && blindMs > 180000)
       ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
           (fqC.solid && frozenC)
             ? `🧊 Завис GPS-модуль: авто ЇДЕ, а точка стоїть ${fmtDur(frozenMs/1000)} — ${rebootNote(d.id, blindMs)}`
@@ -1171,7 +1223,7 @@ function renderMap(devs) {
     const jamState = gnssJamState(tel);
     const jamMs2 = jamDuration(d.id, jamState);
     // «точка застаріла» тепер = не довіряємо позиції довше GPS_LOST_MS (ловить і спуф із valid=true, не лише valid=false)
-    const gpsLost = jamState > 0 || (trusted !== 'solid' && gpsLostMs != null && gpsLostMs > GPS_LOST_MS);   // і tentative-точки старіють: мертва антена → жовтий пунктир
+    const gpsLost = jamState > 0 || !!stuckFix[d.id] || (trusted !== 'solid' && gpsLostMs != null && gpsLostMs > GPS_LOST_MS);   // і tentative-точки старіють: мертва антена → жовтий пунктир
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
     const movingM = online && tv(tel,'movement.status') === true;
