@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v94';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v95';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1604,6 +1604,23 @@ async function periodReport(id, from, to, isStale) {
   }
   msgs.sort((a,b)=> (a.timestamp||0)-(b.timestamp||0));
   const mdR = ((devCache || []).find(x => x.id === id) || {}).metadata || {};   // калібрування палива — як у fuelCurrent
+  // ПАЛИВО ДО ПОЧАТКУ ДОБИ. Заправка, після якої трекер мовчав (вихідні, ніч, заглушене авто), падала в «дірку»
+  // між днями: вкладка дня починала вже з повним баком і писала «Залито —» (Іван 07.10: обидва Master заправлені
+  // між пт 15:30 і вт 09:10 — 26→64 і 34→87 сирих, а «вівторок» заправки не показував). Беремо медіану останніх
+  // замірів до from; той самий канал і калібрування, що й у циклі нижче. +1 запит лише для дизелів.
+  const tankS = tankFor(id);   // `tank` оголошено нижче — тут власна копія (інакше TDZ)
+  const fuelSeedP = (!mdR.ev && tankS) ? (async () => {
+    try {
+      const fld = mdR.fuelByPct ? 'can.fuel.level' : 'can.fuel.volume';
+      const dS = encodeURIComponent(JSON.stringify({ from: Math.max(0, from - 7*86400), to: from, count: 5, reverse: true,
+        filter: fld, fields: 'timestamp,can.fuel.volume,can.fuel.level' }));
+      const rs = (await api(`/gw/devices/${id}/messages?data=${dS}`)) || [];
+      const Ls = rs.map(m => { const v = m[fld]; if (!(v > 0)) return null;
+        return fld === 'can.fuel.level' ? calFuel(v / 100 * tankS, mdR) : calFuel(v, mdR); })
+        .filter(L => L != null && L <= tankS * 1.6).sort((a, b) => a - b);
+      return Ls.length ? { L: Ls[Math.floor(Ls.length / 2)] } : null;
+    } catch(e) { return null; }   // без «до» — просто не бачимо заправку на стику, решта звіту чинна
+  })() : Promise.resolve(null);
 
   // ЯКІР ПОЧАТКУ ПЕРІОДУ: остання ВІДОМА позиція до `from` (заглядаємо на 4 доби назад —
   // щоб понеділок стикувався з пʼятницею, а не починався «з нізвідки» після вихідних).
@@ -2001,6 +2018,14 @@ async function periodReport(id, from, to, isStale) {
     // НЕокруглене — лише для л/100: ціле spentL на 20-км добі давало ±30% (Kangoo 1,3 л → «1 л» → 4,8 замість 6,2)
     spentRaw = Math.max(0, (firstFuel - lastFuel) + fillsRaw - drainsRaw);
   }
+  const fuelSeed = await fuelSeedP;
+  let fuelSeeded = false;
+  if (fuelSeed && firstFuel != null && fuelFirstE && !truncated && firstFuel - fuelSeed.L >= FILL_L) {
+    // ПІСЛЯ розрахунку spentL: доба почалась уже з повним баком, тож ця заправка в денну витрату не входить
+    fills.push({ ts: fuelFirstE.ts, l: firstFuel - fuelSeed.L, pt: fuelFirstE.pt, after: true });
+    filledL = (filledL || 0) + Math.round(firstFuel - fuelSeed.L);
+    fuelSeeded = true;
+  }
 
   // ===== ВІДРІЗКИ РУХУ (для стрічки дня): проміжки між зупинками =====
   const odoS = odoSrcArr || odoGnss;   // ТЕ САМЕ джерело, що й пробіг (шкали різні — не мішати!)
@@ -2090,7 +2115,7 @@ async function periodReport(id, from, to, isStale) {
 
   const rep = { odoKm, odoSrc, gpsKm, filledL, spentL, spentRaw, drainedL, fuelFirst: fuelFirstE, fuelLast: fuelLastE, socFirst, socLast, driveSec, standSec, segments, maxSpd, truncated, partial: auxFail, charges, evKwh, evCost, jamSec, anchor, anchorEnd, spdLimit,
            spdCount: speedings.length, spdSec: speedings.reduce((a,e)=>a+(e.endTs-e.ts),0), speedings: speedings.slice(0, 100),
-           fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
+           fills: fills.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt,after:!!f.after})), fuelSeeded,
            drains: drains.map(f=>({ts:f.ts,l:Math.round(f.l),pt:f.pt})),
            track: simplifyTrack(thinTrack(track), TRACK_SIMPLIFY_M), stops };
   repPut(id, from, to, rep);
@@ -2176,7 +2201,7 @@ function mergeReports(parts, incomplete, spans, id){
     const f0 = p.fuelFirst, s0 = p.socFirst;
     if (f0 && pF) {
       const g = f0.L - pF.L, hole = f0.ts - pF.ts;
-      if (g >= FILL_L) nFills.push({ ts: f0.ts, l: Math.round(g), pt: f0.pt || pF.pt });   // заправка із заглушеним двигуном через опівніч
+      if (g >= FILL_L && !p.fuelSeeded) nFills.push({ ts: f0.ts, l: Math.round(g), pt: f0.pt || pF.pt });   // заправка із заглушеним двигуном через опівніч
       else if (-g >= parkDrainMin(hole) && parkedHole(hole, pF.od, f0.od)) nDrains.push({ ts: pF.ts, l: Math.round(-g), pt: pF.pt });
     }
     if (s0 && pS && s0.od != null && pS.od != null && s0.od - pS.od < 0.5) {   // стояв (одометр той самий)
@@ -2547,7 +2572,7 @@ async function loadPeriod(el) {
   _dRep = r;   // для focusSeg (тап по відрізку «Їхав»)
   r.stops.forEach((s,i)=> items.push({ ts:s.ts, type:'stop', n:i+1, dur:s.dur, pt:s.pt }));
   (r.segments||[]).forEach((s,si)=> items.push({ ts:s.ts, type:'drive', dur:s.dur, km:s.km, maxSpd:s.maxSpd, si }));
-  r.fills.forEach(x=> items.push({ ts:x.ts, type:'fill', l:x.l, pt:x.pt }));
+  r.fills.forEach(x=> items.push({ ts:x.ts, type:'fill', l:x.l, pt:x.pt, after:x.after }));
   r.drains.forEach(x=> items.push({ ts:x.ts, type:'drain', l:x.l, pt:x.pt }));
   (r.charges||[]).forEach(c=> { if (c.pct >= 2) items.push({ ts:c.ts, type:'charge', pct:c.pct, kwh:c.kwh, uah:c.uah, pt:c.pt }); });
   (r.speedings||[]).forEach((e,si)=> items.push({ ts:e.ts, type:'speed', dur:e.endTs-e.ts, maxSpd:e.maxSpd, pt:(e.pts&&e.pts[0])||null, si }));
@@ -2577,7 +2602,7 @@ async function loadPeriod(el) {
       if (it.type === 'speed') { pre = `${fmtDur(it.dur)} понад ${r.spdLimit || 110} км/г`; t2 = pre + (it.pt ? ' · …' : ''); }
       if (it.type === 'stop')   t1 = `№${it.n} стояв ${fmtDur(it.dur)}`;
       if (it.type === 'drive') { t1 = `Їхав ${fmtDur(it.dur)}`; t2 = [it.km!=null?`${it.km} км`:null, it.maxSpd?`до ${it.maxSpd} км/г`:null].filter(Boolean).join(' · '); }
-      if (it.type === 'fill')   t1 = `<span style="color:var(--green)">Заправка +${it.l} л</span>`;
+      if (it.type === 'fill')   t1 = `<span style="color:var(--green)">Заправка +${it.l} л</span>${it.after ? ' <span style="color:var(--dim);font-size:11px">· після стоянки</span>' : ''}`;
       if (it.type === 'drain')  t1 = `<span style="color:var(--red)">Злив? −${it.l} л</span>`;
       if (it.type === 'speed')  t1 = `<span style="color:var(--red)">🚀 Перевищення до ${it.maxSpd} км/г</span>`;
       if (it.type === 'charge') t1 = `<span style="color:var(--green)">Зарядка +${it.pct}%${it.kwh!=null?` · ≈${it.kwh} кВт·год${it.uah!=null?` · ${it.uah} грн`:''}`:''}</span>`;
