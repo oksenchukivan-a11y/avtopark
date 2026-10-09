@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v97';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v98';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -616,6 +616,7 @@ function jamBackfill(devId){
     if (jamStartTs[devId] === st0 && t < st0) {           // епізод не закрили й не переставили, поки йшов запит
       jamStartTs[devId] = t;
       try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){}
+      _renderFp = '';   // картку треба перемалювати: інакше пропуск «нічого не змінилось» тримав «вже 0 с»
     }
   }).catch(()=>{}).finally(() => { delete _jamBackP[devId]; });
 }
