@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v96';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v97';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -600,6 +600,25 @@ try { jamSeenAt = JSON.parse(localStorage.getItem('jamSeenAt') || '{}'); } catch
 // удень фікс був — о 15:00 картка писала «вже 6 год 44 хв», і йшов cpureset. Тому після перерви в спостереженні
 // звіряємо початок з історією flespi: ОДИН запит — останній твердий фікс (valid + ≥4 супутники) після початку
 // епізоду; знайшовся — епізод рахуємо від нього. Перед авто-ребутом звірка обовʼязкова (autoReboot).
+// Епізод, що почався ДО відкриття застосунку, показувався як «нема GPS-фіксу вже 11 с» (Kangoo 8440 09.10:
+// глушіння під Борисполем тривало ~40 хв, авто їхало). jamVerify уміє лише посунути початок ПІЗНІШЕ, тому при
+// першому помічанні епізоду беремо з flespi останній твердий фікс: епізод почався одразу після нього (1 запит).
+const _jamBackP = {};
+function jamBackfill(devId){
+  const st0 = jamStartTs[devId];
+  if (!st0 || _jamBackP[devId]) return;
+  const toS = Math.floor(st0 / 1000);
+  const data = encodeURIComponent(JSON.stringify({ from: toS - 24*3600, to: toS, reverse: true, count: 1,
+    filter: 'position.valid=true&&position.satellites>=4', fields: 'timestamp' }));
+  _jamBackP[devId] = api(`/gw/devices/${devId}/messages?data=${data}`).then(res => {
+    const fx = res && res[0] && res[0].timestamp;
+    const t = fx ? fx * 1000 : (toS - 24*3600) * 1000;   // за добу жодного твердого фікса — щонайменше доба
+    if (jamStartTs[devId] === st0 && t < st0) {           // епізод не закрили й не переставили, поки йшов запит
+      jamStartTs[devId] = t;
+      try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){}
+    }
+  }).catch(()=>{}).finally(() => { delete _jamBackP[devId]; });
+}
 function jamVerify(devId){
   if (_jamVerP[devId]) return _jamVerP[devId];
   const st0 = jamStartTs[devId];
@@ -621,7 +640,7 @@ function jamDuration(devId, jamState){
   if (_snapRender) return jamStartTs[devId] ? now - jamStartTs[devId] : 0;   // знімок лише читаємо
   if (jamState > 0) {
     delete _jamCleanSince[devId];
-    if (!jamStartTs[devId]) { jamStartTs[devId] = now; try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){} }
+    if (!jamStartTs[devId]) { jamStartTs[devId] = now; try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){} jamBackfill(devId); }
     else if (now - (jamSeenAt[devId] || 0) > JAM_CLEAR_MS && now - (_jamVerAt[devId] || 0) > 300000) jamVerify(devId).catch(()=>{});   // була перерва — звіряємо (≤1 запит на 5 хв)
     if (now - (jamSeenAt[devId] || 0) > 60000) { jamSeenAt[devId] = now; try { localStorage.setItem('jamSeenAt', JSON.stringify(jamSeenAt)); } catch(e){} }
     return now - jamStartTs[devId];
@@ -1072,7 +1091,7 @@ function renderCards(devs, enrich) {
       ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
           (fqC.solid && frozenC)
             ? `🧊 Завис GPS-модуль: авто ЇДЕ, а точка стоїть ${fmtDur(frozenMs/1000)} — ${rebootNote(d.id, blindMs)}`
-            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(blindMs/1000)} — точка на карті застаріла`}</div>`
+            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла`}</div>`
       : showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? (movingC
