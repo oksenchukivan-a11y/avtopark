@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v99';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v100';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -617,9 +617,12 @@ function anchorFromHistory(devId, m){
   if (ts <= (lastValidPosTs[devId] || 0)) return;   // новіше вже бачили наживо
   lastValidPos[devId] = [lat, lon];
   lastValidPosTs[devId] = ts;
+  const km = m['can.vehicle.mileage'];
+  if (km > 0) lastValidPosKm[devId] = km; else delete lastValidPosKm[devId];   // без пробігу краще нічого, ніж чужий
   try {
     localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
     localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
+    localStorage.setItem('lastValidPosKm', JSON.stringify(lastValidPosKm));
   } catch(e){}
   _renderFp = '';
 }
@@ -629,7 +632,7 @@ function jamBackfill(devId){
   if (!st0 || _jamBackP[devId]) return;
   const toS = Math.floor(st0 / 1000);
   const data = encodeURIComponent(JSON.stringify({ from: toS - 24*3600, to: toS, reverse: true, count: 1,
-    filter: SOLID_FILTER, fields: 'timestamp,position.latitude,position.longitude' }));
+    filter: SOLID_FILTER, fields: 'timestamp,position.latitude,position.longitude,can.vehicle.mileage' }));
   _jamBackP[devId] = api(`/gw/devices/${devId}/messages?data=${data}`).then(res => {
     const fx = res && res[0] && res[0].timestamp;
     anchorFromHistory(devId, res && res[0]);
@@ -647,7 +650,7 @@ function jamVerify(devId){
   if (!st0) return Promise.resolve();
   _jamVerAt[devId] = Date.now();
   const data = encodeURIComponent(JSON.stringify({ from: Math.floor(st0/1000), to: Math.floor(Date.now()/1000), reverse: true, count: 1,
-    filter: SOLID_FILTER, fields: 'timestamp,position.latitude,position.longitude' }));
+    filter: SOLID_FILTER, fields: 'timestamp,position.latitude,position.longitude,can.vehicle.mileage' }));
   _jamVerP[devId] = api(`/gw/devices/${devId}/messages?data=${data}`).then(res => {
     const fx = res && res[0] && res[0].timestamp;
     anchorFromHistory(devId, res && res[0]);
@@ -910,11 +913,20 @@ let lastValidPos = {};   // остання ВАЛІДНА позиція кож�
 try { lastValidPos = JSON.parse(localStorage.getItem('lastValidPos') || '{}'); } catch(e) { lastValidPos = {}; }
 let lastValidPosTs = {};   // коли саме був той останній валідний фікс — щоб бачити "GPS втрачено Х год тому"
 try { lastValidPosTs = JSON.parse(localStorage.getItem('lastValidPosTs') || '{}'); } catch(e) { lastValidPosTs = {}; }
+// CAN-пробіг у момент якоря: під РЕБ точка стоїть, а одометр авто (OBD) їде далі — показуємо, скільки км від неї проїхало
+// (9216 23.10: без фіксу 1 год, точка під Тернами, а авто вже +72 км, під Степанівкою)
+let lastValidPosKm = {};
+try { lastValidPosKm = JSON.parse(localStorage.getItem('lastValidPosKm') || '{}'); } catch(e) { lastValidPosKm = {}; }
+function kmSinceFix(devId, tel){
+  const k0 = lastValidPosKm[devId], k = tv(tel,'can.vehicle.mileage');
+  return (k0 > 0 && k > 0 && k - k0 >= 1) ? Math.round(k - k0) : null;
+}
+const kmNote = km => km ? ` · від неї вже +${km} км` : '';
 // чистка «зомбі»-позицій: якщо валідного фіксу не було 30+ днів — забуваємо (нема сенсу показувати місяцями стару точку)
 {
   const cutoff = Date.now() - 30*86400000;
   for (const id of Object.keys(lastValidPosTs)) {
-    if (lastValidPosTs[id] < cutoff) { delete lastValidPosTs[id]; delete lastValidPos[id]; }
+    if (lastValidPosTs[id] < cutoff) { delete lastValidPosTs[id]; delete lastValidPos[id]; delete lastValidPosKm[id]; }
   }
   try {
     localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
@@ -1114,11 +1126,11 @@ function renderCards(devs, enrich) {
       ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
           (fqC.solid && frozenC)
             ? `🧊 Завис GPS-модуль: авто ЇДЕ, а точка стоїть ${fmtDur(frozenMs/1000)} — ${rebootNote(d.id, blindMs)}`
-            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла`}</div>`
+            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла${kmNote(kmSinceFix(d.id, tel))}`}</div>`
       : showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? (movingC
-          ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла</div>`
+          ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла${kmNote(kmSinceFix(d.id, tel))}</div>`
           : `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу вже ${fmtDur(jamMs/1000)} (стоянка без неба / антена?)</div>`)
       : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ Сумнівний GPS-фікс вже ${fmtDur(jamMs/1000)} (точка може бути хибна — можливий спуф)</div>`
       : ((gpsLostLong && !gnssSleep) ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
@@ -1244,6 +1256,8 @@ function renderMap(devs) {
       if (!old || old[0] !== lat || old[1] !== lon || Date.now() - (lastValidPosTs[d.id]||0) > 60000) {
         lastValidPos[d.id] = [lat, lon];
         lastValidPosTs[d.id] = Date.now();
+        const km = tv(tel,'can.vehicle.mileage');
+        if (km > 0) lastValidPosKm[d.id] = km; else delete lastValidPosKm[d.id];
         posDirty = true;
       }
     } else if (!trusted) {
@@ -1269,7 +1283,8 @@ function renderMap(devs) {
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
     const movingM = online && tv(tel,'movement.status') === true;
-    const gpsWarn = jamState === 2 ? `<br>${movingM ? '🚫 їде без GPS-фіксу' : '📍 нема GPS-фіксу'} вже ${fmtDur(jamMs2/1000)}`
+    const kmB = gpsLost ? kmSinceFix(d.id, tel) : null;
+    const gpsWarn = jamState === 2 ? `<br>${movingM ? '🚫 їде без GPS-фіксу' : '📍 нема GPS-фіксу'} вже ${fmtDur(jamMs2/1000)}${kmNote(kmB)}`
       : jamState === 1 ? `<br>⚠️ сумнівний GPS-фікс вже ${fmtDur(jamMs2/1000)}`
       : (gpsLost ? `<br>⚠️ GPS втрачено ${fmtDur(gpsLostMs/1000)} тому — точка застаріла` : '');
     const html = `<b>${esc(d.name)}</b><br>${status}${liters!=null?' · '+liters+' л':''}${gpsWarn}`;
@@ -1283,11 +1298,15 @@ function renderMap(devs) {
     } else {
       markers[d.id] = markerFor(d, [lat,lon], online, active, gpsLost).addTo(map).bindPopup(html);
     }
+    // підпис на карті: «Master 9216 · +72 км без GPS» — видно одразу, що точка стара і наскільки
+    const lbl = esc(((d.metadata||{}).short) || d.name || '') + (kmB ? ` · +${kmB} км без GPS` : '');
+    if (markers[d.id]._lbl !== lbl) { markers[d.id].setTooltipContent(lbl); markers[d.id]._lbl = lbl; }
   }
   if (posDirty) {
     try {
       localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
       localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
+      localStorage.setItem('lastValidPosKm', JSON.stringify(lastValidPosKm));
     } catch(e){}
   }
   // маркери-привиди: пристрій зник з flespi (видалили/перенесли) — прибираємо з карти, інакше висить зі старою позицією
