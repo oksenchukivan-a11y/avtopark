@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v98';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v99';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -603,15 +603,36 @@ try { jamSeenAt = JSON.parse(localStorage.getItem('jamSeenAt') || '{}'); } catch
 // Епізод, що почався ДО відкриття застосунку, показувався як «нема GPS-фіксу вже 11 с» (Kangoo 8440 09.10:
 // глушіння під Борисполем тривало ~40 хв, авто їхало). jamVerify уміє лише посунути початок ПІЗНІШЕ, тому при
 // першому помічанні епізоду беремо з flespi останній твердий фікс: епізод почався одразу після нього (1 запит).
+// Твердий фікс у запитах історії flespi — ті самі умови, що fixQuality().solid, крім HDOP (його може не бути в повідомленні).
+// Без перевірки регіону спуф «Ліма, valid=true, 5 супутників» (9216, 23.10) рахувався твердим: епізод «нема фіксу» вийшов 35 хв замість 66.
+const SOLID_FILTER = 'position.valid=true&&position.satellites>=4&&position.latitude>=40&&position.latitude<=62&&position.longitude>=15&&position.longitude<=45';
+// Якір загальної карти оновлювався лише тим, що бачив САМ застосунок. Закритий, поки авто їхало, — і без фіксу карта
+// ставила авто туди, де телефон бачив його востаннє (9216 23.10: «стоїть у Сумах», а їде під Буринем; картка авто
+// з треком flespi показувала правду). Тепер якір підтягуємо з історії тими самими запитами jamBackfill/jamVerify.
+function anchorFromHistory(devId, m){
+  if (!m || m.timestamp == null) return;
+  const lat = m['position.latitude'], lon = m['position.longitude'];
+  if (lat == null || lon == null || !saneRegion(lat, lon)) return;
+  const ts = m.timestamp * 1000;
+  if (ts <= (lastValidPosTs[devId] || 0)) return;   // новіше вже бачили наживо
+  lastValidPos[devId] = [lat, lon];
+  lastValidPosTs[devId] = ts;
+  try {
+    localStorage.setItem('lastValidPos', JSON.stringify(lastValidPos));
+    localStorage.setItem('lastValidPosTs', JSON.stringify(lastValidPosTs));
+  } catch(e){}
+  _renderFp = '';
+}
 const _jamBackP = {};
 function jamBackfill(devId){
   const st0 = jamStartTs[devId];
   if (!st0 || _jamBackP[devId]) return;
   const toS = Math.floor(st0 / 1000);
   const data = encodeURIComponent(JSON.stringify({ from: toS - 24*3600, to: toS, reverse: true, count: 1,
-    filter: 'position.valid=true&&position.satellites>=4', fields: 'timestamp' }));
+    filter: SOLID_FILTER, fields: 'timestamp,position.latitude,position.longitude' }));
   _jamBackP[devId] = api(`/gw/devices/${devId}/messages?data=${data}`).then(res => {
     const fx = res && res[0] && res[0].timestamp;
+    anchorFromHistory(devId, res && res[0]);
     const t = fx ? fx * 1000 : (toS - 24*3600) * 1000;   // за добу жодного твердого фікса — щонайменше доба
     if (jamStartTs[devId] === st0 && t < st0) {           // епізод не закрили й не переставили, поки йшов запит
       jamStartTs[devId] = t;
@@ -626,9 +647,10 @@ function jamVerify(devId){
   if (!st0) return Promise.resolve();
   _jamVerAt[devId] = Date.now();
   const data = encodeURIComponent(JSON.stringify({ from: Math.floor(st0/1000), to: Math.floor(Date.now()/1000), reverse: true, count: 1,
-    filter: 'position.valid=true&&position.satellites>=4', fields: 'timestamp' }));
+    filter: SOLID_FILTER, fields: 'timestamp,position.latitude,position.longitude' }));
   _jamVerP[devId] = api(`/gw/devices/${devId}/messages?data=${data}`).then(res => {
     const fx = res && res[0] && res[0].timestamp;
+    anchorFromHistory(devId, res && res[0]);
     if (fx && fx * 1000 > st0 && jamStartTs[devId] === st0) {   // епізод не закрили/не переставили, поки йшов запит
       jamStartTs[devId] = fx * 1000;
       try { localStorage.setItem('jamStartTs', JSON.stringify(jamStartTs)); } catch(e){}
