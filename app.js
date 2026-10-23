@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v100';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v101';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -922,6 +922,17 @@ function kmSinceFix(devId, tel){
   return (k0 > 0 && k > 0 && k - k0 >= 1) ? Math.round(k - k0) : null;
 }
 const kmNote = km => km ? ` · від неї вже +${km} км` : '';
+// Позиція за вежею зв'язку: сторож на сервері (gps_guard.py, cron 3 хв) без GPS-фіксу кладе її в metadata.lbs.
+// Під РЕБ мобільний звʼязок працює — точка приблизна (±0,1–3 км), але показує, де авто ЗАРАЗ, а не годину тому.
+function lbsFix(d){
+  const l = (d.metadata || {}).lbs;
+  if (!l || l.lat == null || l.lon == null || !saneRegion(l.lat, l.lon)) return null;
+  if (Date.now()/1000 - (l.ts || 0) > 20*60) return null;                 // стара — не віримо
+  if ((lastValidPosTs[d.id] || 0) >= (l.ts || 0) * 1000) return null;     // справжній GPS свіжіший
+  return l;
+}
+const accTxt = m => m >= 1000 ? `±${(m/1000).toFixed(1).replace('.', ',')} км` : `±${Math.max(100, Math.round(m/100)*100)} м`;
+const lbsNote = l => ` · на карті — приблизно за вежею звʼязку (${accTxt(l.acc || 1500)})`;
 // чистка «зомбі»-позицій: якщо валідного фіксу не було 30+ днів — забуваємо (нема сенсу показувати місяцями стару точку)
 {
   const cutoff = Date.now() - 30*86400000;
@@ -1126,11 +1137,11 @@ function renderCards(devs, enrich) {
       ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
           (fqC.solid && frozenC)
             ? `🧊 Завис GPS-модуль: авто ЇДЕ, а точка стоїть ${fmtDur(frozenMs/1000)} — ${rebootNote(d.id, blindMs)}`
-            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла${kmNote(kmSinceFix(d.id, tel))}`}</div>`
+            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла${lbsFix(d) ? lbsNote(lbsFix(d)) : kmNote(kmSinceFix(d.id, tel))}`}</div>`
       : showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? (movingC
-          ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла${kmNote(kmSinceFix(d.id, tel))}</div>`
+          ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла${lbsFix(d) ? lbsNote(lbsFix(d)) : kmNote(kmSinceFix(d.id, tel))}</div>`
           : `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу вже ${fmtDur(jamMs/1000)} (стоянка без неба / антена?)</div>`)
       : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ Сумнівний GPS-фікс вже ${fmtDur(jamMs/1000)} (точка може бути хибна — можливий спуф)</div>`
       : ((gpsLostLong && !gnssSleep) ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
@@ -1269,6 +1280,8 @@ function renderMap(devs) {
       // свіжа інсталяція, точка в регіоні, але недовірена: показуємо як є — прапорці глушіння скажуть, що вона приблизна
     }
     // 'tentative' → малюємо координати трекера, якір не чіпаємо
+    const lbsM = trusted !== 'solid' ? lbsFix(d) : null;          // без твердого фіксу — свіжа точка за вежею краща за стару
+    if (lbsM) { lat = lbsM.lat; lon = lbsM.lon; }
     if (lat == null || lon == null) continue;                       // позиції ще ніколи не було
     const online = statusOnline(tel);
     const active = displayActive(d, tel, online);
@@ -1283,10 +1296,11 @@ function renderMap(devs) {
     pts.push([lat,lon]);
     const status = active ? '🟢 в роботі' : (online ? '⚪ на звʼязку' : '⚫ офлайн');
     const movingM = online && tv(tel,'movement.status') === true;
-    const kmB = gpsLost ? kmSinceFix(d.id, tel) : null;
-    const gpsWarn = jamState === 2 ? `<br>${movingM ? '🚫 їде без GPS-фіксу' : '📍 нема GPS-фіксу'} вже ${fmtDur(jamMs2/1000)}${kmNote(kmB)}`
+    const kmB = (gpsLost && !lbsM) ? kmSinceFix(d.id, tel) : null;
+    const gpsWarn = (lbsM ? `<br>📡 приблизно за вежею звʼязку (${accTxt(lbsM.acc || 1500)})` : '')
+      + (jamState === 2 ? `<br>${movingM ? '🚫 їде без GPS-фіксу' : '📍 нема GPS-фіксу'} вже ${fmtDur(jamMs2/1000)}${kmNote(kmB)}`
       : jamState === 1 ? `<br>⚠️ сумнівний GPS-фікс вже ${fmtDur(jamMs2/1000)}`
-      : (gpsLost ? `<br>⚠️ GPS втрачено ${fmtDur(gpsLostMs/1000)} тому — точка застаріла` : '');
+      : (gpsLost ? `<br>⚠️ GPS втрачено ${fmtDur(gpsLostMs/1000)} тому — точка застаріла` : ''));
     const html = `<b>${esc(d.name)}</b><br>${status}${liters!=null?' · '+liters+' л':''}${gpsWarn}`;
     if (markers[d.id]) {
       markers[d.id].setLatLng([lat,lon]);
@@ -1299,7 +1313,7 @@ function renderMap(devs) {
       markers[d.id] = markerFor(d, [lat,lon], online, active, gpsLost).addTo(map).bindPopup(html);
     }
     // підпис на карті: «Master 9216 · +72 км без GPS» — видно одразу, що точка стара і наскільки
-    const lbl = esc(((d.metadata||{}).short) || d.name || '') + (kmB ? ` · +${kmB} км без GPS` : '');
+    const lbl = esc(((d.metadata||{}).short) || d.name || '') + (lbsM ? ` · ≈ за вежею ${accTxt(lbsM.acc || 1500)}` : (kmB ? ` · +${kmB} км без GPS` : ''));
     if (markers[d.id]._lbl !== lbl) { markers[d.id].setTooltipContent(lbl); markers[d.id]._lbl = lbl; }
   }
   if (posDirty) {
