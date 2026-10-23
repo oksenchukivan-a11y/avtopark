@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v101';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v102';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -768,20 +768,14 @@ async function checkStuckFix(d){
     const v = stuckFromHistory((await api(`/gw/devices/${d.id}/messages?data=${q}`)) || []);
     if (v && v.k === k) {
       stuckFix[d.id] = v;
-      // лікування — те саме перезавантаження, що й для «наосліп», з тим самим 12-год кулдауном і перевіркою черги.
-      // Трекер може спати (авто заглушене) — команда чекає в черзі й виконається при пробудженні (07.10: за ~4 хв).
-      if (Date.now() - (autoRebootAt[d.id] || 0) >= AUTO_REBOOT_COOLDOWN_MS && !_rbBusy[d.id]) {
-        _rbBusy[d.id] = true;
-        autoReboot(d.id, false).finally(() => { delete _rbBusy[d.id]; });
-      }
+      // лікування — перезапуск ввечері на стоянці (сторож на сервері), не посеред маршруту (рішення Івана 23.10.2026)
     } else delete stuckFix[d.id];
   } catch(e) { _stuckAt[d.id] = Date.now() - STUCK_CHECK_MS + 2 * 60000; }   // збій — повтор за 2 хв, не на кожному рендері
 }
 function rebootNote(id, blindMs){
   const at = autoRebootAt[id] || 0, ago = Date.now() - at;
   if (ago < 30*60000) return 'перезавантаження надіслано о ' + fmtTime(at/1000);
-  if (ago >= AUTO_REBOOT_COOLDOWN_MS && blindMs < 20*60000) return 'якщо не мине — перезавантажу трекер за ' + fmtDur(Math.max(60, (20*60000 - blindMs)/1000));
-  return 'перевір трекер (кнопка перезавантаження — у деталях)';
+  return 'перезавантажу ввечері на стоянці — на маршруті не чіпаємо';
 }
 // запас з адаптацією під ЗАРЯД для електричок (датчик авто застрягає на постійному значенні — як Kangoo Z.E. = 185 при будь-якому %)
 function vehicleRange(dev, tel){
@@ -980,7 +974,8 @@ let _renderFp = '', _renderSkips = 0;
 async function loadDevices() {
   const devs = await api('/gw/devices/all?fields=id,name,telemetry,metadata');
   devCache = devs;
-  for (const d of devs) maybeAutoReboot(d, d.telemetry || {});
+  // Рішення Івана 23.10.2026: посеред маршруту трекер НЕ перезавантажуємо (губиться трек). Перезапуск робить сторож
+  // на сервері (gps_guard.py) ввечері на стоянці — лише тим, у кого вдень були проблеми з GPS. maybeAutoReboot не викликаємо.
   for (const d of devs) checkStuckFix(d);   // завислий «твердий» фікс — раз на 15 хв на авто, 1 легкий запит   // лише на СВІЖИХ даних (не з рендера і не зі знімка)
   // знімок останнього успішного стану — щоб при наступному відкритті одразу бачити авто (без спінера й без помилки)
   try { localStorage.setItem('devSnapshot', JSON.stringify({ ts: Date.now(), devs })); } catch(e){}
@@ -1132,7 +1127,7 @@ function renderCards(devs, enrich) {
     const frozenC = frozenMs > 120000 && !!(posSeen[d.id] && posSeen[d.id].mv);   // той самий предикат, що в blindDrivingMs
     const sf = stuckFix[d.id];
     const locHtml = sf
-      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">🧊 Завис GPS-модуль: авто проїхало ${sf.km} км, а точка стоїть на місці — ${(Date.now() - (autoRebootAt[d.id] || 0) < 30*60000) ? 'перезавантаження надіслано о ' + fmtTime((autoRebootAt[d.id] || 0)/1000) : (Date.now() - (autoRebootAt[d.id] || 0) < AUTO_REBOOT_COOLDOWN_MS ? 'перевір трекер (кнопка — у деталях)' : 'перезавантажую трекер')}</div>`
+      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">🧊 Завис GPS-модуль: авто проїхало ${sf.km} км, а точка стоїть на місці — ${(Date.now() - (autoRebootAt[d.id] || 0) < 30*60000) ? 'перезавантаження надіслано о ' + fmtTime((autoRebootAt[d.id] || 0)/1000) : 'перезавантажу ввечері на стоянці'}</div>`
       : (online && blindMs > 180000)
       ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
           (fqC.solid && frozenC)
