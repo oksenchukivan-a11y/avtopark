@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v102';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v103';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -918,10 +918,17 @@ function kmSinceFix(devId, tel){
 const kmNote = km => km ? ` · від неї вже +${km} км` : '';
 // Позиція за вежею зв'язку: сторож на сервері (gps_guard.py, cron 3 хв) без GPS-фіксу кладе її в metadata.lbs.
 // Під РЕБ мобільний звʼязок працює — точка приблизна (±0,1–3 км), але показує, де авто ЗАРАЗ, а не годину тому.
-function lbsFix(d){
+// v103 (04.11): давність вежі рахуємо від ОСТАННЬОГО ПОВІДОМЛЕННЯ трекера, а не від «зараз». Трекер на стоянці засинає
+// і мовчить годинами — вежа, яку сторож записав перед сном, лишається правдою (9216 04.11: стояв у Сумах, а карта
+// тримала точку під Терешківкою, бо вежа «постаріла» за 20 хв). Абсолютна стеля — 3 доби.
+function lbsFix(d, tel){
   const l = (d.metadata || {}).lbs;
   if (!l || l.lat == null || l.lon == null || !saneRegion(l.lat, l.lon)) return null;
-  if (Date.now()/1000 - (l.ts || 0) > 20*60) return null;                 // стара — не віримо
+  const now = Date.now()/1000;
+  const lastMsg = tel ? (tv(tel, 'server.timestamp') || tts(tel, 'position') || 0) : 0;
+  const ref = lastMsg > 0 ? Math.min(now, lastMsg) : now;
+  if (ref - (l.ts || 0) > 20*60) return null;                             // трекер на звʼязку, а вежа стара — не віримо
+  if (now - (l.ts || 0) > 3*86400) return null;
   if ((lastValidPosTs[d.id] || 0) >= (l.ts || 0) * 1000) return null;     // справжній GPS свіжіший
   return l;
 }
@@ -1132,12 +1139,12 @@ function renderCards(devs, enrich) {
       ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
           (fqC.solid && frozenC)
             ? `🧊 Завис GPS-модуль: авто ЇДЕ, а точка стоїть ${fmtDur(frozenMs/1000)} — ${rebootNote(d.id, blindMs)}`
-            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла${lbsFix(d) ? lbsNote(lbsFix(d)) : kmNote(kmSinceFix(d.id, tel))}`}</div>`
+            : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла${lbsFix(d, tel) ? lbsNote(lbsFix(d, tel)) : kmNote(kmSinceFix(d.id, tel))}`}</div>`
       : showLoc
       ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? (movingC
-          ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла${lbsFix(d) ? lbsNote(lbsFix(d)) : kmNote(kmSinceFix(d.id, tel))}</div>`
-          : `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу вже ${fmtDur(jamMs/1000)} (стоянка без неба / антена?)</div>`)
+          ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла${lbsFix(d, tel) ? lbsNote(lbsFix(d, tel)) : kmNote(kmSinceFix(d.id, tel))}</div>`
+          : `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу вже ${fmtDur(jamMs/1000)}${lbsFix(d, tel) ? ' — стоїть приблизно за вежею звʼязку (' + accTxt(lbsFix(d, tel).acc || 1500) + ')' : ' (стоянка без неба / антена?)'}</div>`)
       : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ Сумнівний GPS-фікс вже ${fmtDur(jamMs/1000)} (точка може бути хибна — можливий спуф)</div>`
       : ((gpsLostLong && !gnssSleep) ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
       : ((!active && lat != null && lon != null && !fqC.solid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу${gnssSleep ? ' (GPS спить)' : ''}</div>` : ''))));
@@ -1275,7 +1282,7 @@ function renderMap(devs) {
       // свіжа інсталяція, точка в регіоні, але недовірена: показуємо як є — прапорці глушіння скажуть, що вона приблизна
     }
     // 'tentative' → малюємо координати трекера, якір не чіпаємо
-    const lbsM = trusted !== 'solid' ? lbsFix(d) : null;          // без твердого фіксу — свіжа точка за вежею краща за стару
+    const lbsM = trusted !== 'solid' ? lbsFix(d, tel) : null;          // без твердого фіксу — свіжа точка за вежею краща за стару
     if (lbsM) { lat = lbsM.lat; lon = lbsM.lon; }
     if (lat == null || lon == null) continue;                       // позиції ще ніколи не було
     const online = statusOnline(tel);
