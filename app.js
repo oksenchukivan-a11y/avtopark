@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v103';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v104';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -302,6 +302,9 @@ function fuelLiters(dev, tel) {
   if (moving && id && lastFuel[id] != null) {
     if (live != null && live > 0) {
       const roll = (_fuelRoll[id] = _fuelRoll[id] || []);
+      // Перший замір після відкриття застосунку — одразу живий датчик: кеш у телефоні може бути вчорашнім
+      // (05.11 Зелений: відкрив на ходу — картка 105 л після вчорашньої заправки, а в баку ≈79). Далі — медіана.
+      if (!roll.length && lastFuel[id] !== live) { lastFuel[id] = live; try { localStorage.setItem('lastFuel', JSON.stringify(lastFuel)); } catch(e){} }
       const stamp = tv(tel,'server.timestamp') || 0;   // той самий пакет телеметрії не рахуємо двічі (рендер частіший за пакети на стоянці)
       if (!roll.length || roll[roll.length-1][0] !== stamp) { roll.push([stamp, live]); if (roll.length > FUEL_ROLL_N) roll.shift(); }
       if (roll.length >= 3) {
