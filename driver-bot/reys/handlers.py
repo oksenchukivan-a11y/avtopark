@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from . import build, engine, onec, store, ui
 
@@ -19,6 +19,7 @@ log = logging.getLogger("reys")
 TZ = ZoneInfo("Europe/Kyiv")
 router = Router(name="reys")
 TESTERS: set = set()
+ADMIN = 0                    # власника не обмежують робочі години
 REG = "AccumulationRegister_ВзаиморасчетыСКонтрагентамиПоДокументамРасчетов"
 REAL = "Document_РеализацияТоваровУслуг"
 
@@ -28,11 +29,18 @@ class Reys(StatesGroup):
     expense = State()
 
 
+def ids_from_env(name: str) -> set:
+    return {int(x) for x in os.environ.get(name, "").replace(" ", "").split(",") if x.isdigit()}
+
+
 def setup(dp, admin_id: int = 0, db_path: str = ""):
     """Викликати один раз у main() ПЕРЕД підключенням основного роутера бота."""
+    from . import web                       # тут, а не вгорі: web сам користується цим файлом
     if db_path:
         store.DB_PATH = db_path
-    ids = {int(x) for x in os.environ.get("REYS_TESTERS", "").replace(" ", "").split(",") if x.isdigit()}
+    global ADMIN
+    ADMIN = int(admin_id or 0)
+    ids = ids_from_env("REYS_TESTERS")
     if admin_id:
         ids.add(int(admin_id))
     TESTERS.clear()
@@ -41,6 +49,8 @@ def setup(dp, admin_id: int = 0, db_path: str = ""):
     router.message.filter(F.from_user.id.in_(TESTERS))
     router.callback_query.filter(F.from_user.id.in_(TESTERS))
     dp.include_router(router)
+    dp.startup.register(web.start)
+    dp.shutdown.register(web.stop)
     log.info("reys: модуль увімкнено для %d тестувальників", len(TESTERS))
 
 
@@ -111,6 +121,8 @@ def load_snapshot(stem: str):
         raise onec.OneCError(f"знімок не читається: {e}") from e
     for st in run["stops"]:
         st["status"], st.setdefault("probs", [])[:] = None, []
+        build.classify(st)                  # правила могли змінитись після того, як знімок зроблено
+    run["stops"] = [st for st in run["stops"] if st["where"] != "none"]
     run.update(expenses=[], closed=False, snap=True)
     return run
 
@@ -145,7 +157,41 @@ async def load_run(ref: str):
         "Document_ЗаказПокупателя", with_inv, "Date,Комментарий,СуммаДокумента,Контрагент_Key",
         field="Контрагент_Key",
         extra=f"Date ge datetime'{since}T00:00:00' and Date le datetime'{sheet['Date'][:19]}' and Posted eq true")
-    return build.build_run(sheet, invoices, names, agents, orders)
+    run = build.build_run(sheet, invoices, names, agents, orders)
+    await load_phones(run)
+    return run
+
+
+def norm_phones(text: str):
+    """«050 123-45-67, 0661234567» → ['+380501234567', '+380661234567']."""
+    out = []
+    for part in re.split(r"[,;/]", text or ""):
+        d = re.sub(r"\D", "", part)
+        if len(d) == 10 and d[0] == "0":
+            d = "38" + d
+        elif len(d) == 9:
+            d = "380" + d
+        if len(d) == 12 and d.startswith("380") and "+" + d not in out:
+            out.append("+" + d)
+    return out
+
+
+async def load_phones(run):
+    """Телефони салонів із картки клієнта в 1С — щоб дзвонити прямо зі списку."""
+    keys = sorted({st["key"] for st in run["stops"] if st["where"] in ("route", "debt")})
+    found = {}
+    try:
+        for part in onec.chunks(keys, 20):
+            flt = "Тип eq 'Телефон' and (" + " or ".join(
+                f"Объект eq cast(guid'{k}', 'Catalog_Контрагенты')" for k in part) + ")"
+            for r in await onec.call("query", object="InformationRegister_КонтактнаяИнформация", filter=flt,
+                                     select="Объект,Представление", top=1000):
+                found.setdefault(r["Объект"], [])
+                found[r["Объект"]] += [p for p in norm_phones(r["Представление"]) if p not in found[r["Объект"]]]
+    except (onec.OneCError, KeyError) as e:     # без телефонів рейс теж працює
+        log.warning("reys: телефони клієнтів не завантажились: %s", e)
+    for st in run["stops"]:
+        st["phones"] = found.get(st["key"], [])[:3]
 
 
 async def load_debts(st):
@@ -206,6 +252,20 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
                 await m.bot.delete_message(m.chat.id, mid)
             except TelegramBadRequest:
                 pass
+    from . import web
+    chat_id, old = store.screen(m.from_user.id)
+    if old:
+        try:
+            await m.bot.delete_message(chat_id, old)
+        except TelegramBadRequest:
+            pass
+        store.set_screen(m.from_user.id, None, None)
+    if web.ready():                                             # рейс відкривається застосунком
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="🚚 Продовжити рейс" if run else "🚚 Відкрити рейс", web_app=WebAppInfo(url=web.url()))]])
+        sent = await m.answer("🚚 <b>Рейс</b>", reply_markup=kb, parse_mode="HTML")
+        store.set_screen(m.from_user.id, m.chat.id, sent.message_id)
+        return
     rows = []
     if run:
         rows.append([("▶️ Продовжити рейс", "r:l")])

@@ -4,6 +4,7 @@ from datetime import datetime
 REASONS = {"acct": "скине на рахунок", "mgr": "домовилась з менеджером",
            "nomoney": "нема грошей", "closed": "зачинено"}
 PROBLEMS = {"miss": "не вистачає", "wrong": "не той товар", "dmg": "пошкоджено", "refuse": "клієнт відмовився"}
+MIN_DEBT = 10.0     # борг менший за це водієві не показуємо і не збираємо
 
 
 def money(x: float) -> str:
@@ -28,8 +29,8 @@ def free(st) -> bool:
 def debts(st):
     """Старі неоплачені накладні. Поки не завантажені з 1С — один рядок із путівки."""
     if st["debts"] is not None:
-        return st["debts"]
-    if st["sheet_debt"] > 0.5:
+        return [d for d in st["debts"] if d["sum"] >= MIN_DEBT]
+    if st["sheet_debt"] >= MIN_DEBT:
         return [{"ref": "", "no": "борг", "date": "", "sum": st["sheet_debt"]}]
     return []
 

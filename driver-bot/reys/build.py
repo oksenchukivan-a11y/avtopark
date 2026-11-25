@@ -75,6 +75,7 @@ def build_run(sheet, invoices, names, agents, orders):
         st["manager"] = st["manager"] or agents.get(inv.get("Агент_Key"), "")
     for st in stops:
         classify(st)
+    stops = [st for st in stops if st["where"] != "none"]      # копійчані й від'ємні сальдо водієві не потрібні
     return {"sheet_ref": sheet.get("Ref_Key", ""), "sheet_no": (sheet.get("Number") or "").lstrip("0"),
             "day": day.isoformat(), "printed": sheet["Date"][11:16], "stops": stops,
             "expenses": [], "closed": False}
@@ -89,7 +90,7 @@ def classify(st):
         st["where"] = "skip"
         kinds = {t for i in st["inv"] for t in i["tags"]} & {"SV", "NP", "DATE"}
         st["skip_why"] = sorted(kinds)
-    elif st["sheet_debt"] > 0.5:
+    elif st["sheet_debt"] >= 10:
         st["where"] = "debt"
     else:
         st["where"] = "none"       # копійчане або від'ємне сальдо — водієві не показуємо

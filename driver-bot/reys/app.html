@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Рейс</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:#f3f0ea; --surface:#fff; --ink:#1f2d33; --muted:#5f6b70; --line:#dcd6cb;
+  --accent:#0e7c6b; --accent-soft:#e3f1ec; --on-accent:#fff;
+  --cash:#1c8a4b; --cash-soft:#dff3e6; --bank:#2f6fd0; --bank-soft:#e2ecfb;
+  --debt:#c2322f; --debt-soft:#fbe6e5; --warn:#b7791f; --warn-soft:#fff2d6;
+  --none:#8d8f94; --none-soft:#ecebe8;
+}
+:root[data-theme="dark"]{
+  --bg:#141917; --surface:#1d2422; --ink:#e9efec; --muted:#9daaa5; --line:#2f3a37;
+  --accent:#4cc3a9; --accent-soft:#17332d; --on-accent:#0f1a17;
+  --cash:#58cf8a; --cash-soft:#173524; --bank:#7aa9f0; --bank-soft:#1b2c47;
+  --debt:#f07470; --debt-soft:#3d1c1c; --warn:#e3a94f; --warn-soft:#3a2c14;
+  --none:#8f969a; --none-soft:#262d2b; color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{min-height:100vh;padding:12px 16px calc(96px + env(safe-area-inset-bottom))}
+h1{font-size:20px;margin:0;font-weight:800}
+.muted{color:var(--muted)} .small{font-size:14px}
+.top{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.top h1{flex:1;min-width:0;line-height:1.2}
+.icon{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:12px;min-width:44px;height:44px;font-size:20px;display:grid;place-items:center;text-decoration:none}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px;margin:10px 0}
+.card.debt{border-color:var(--debt);background:var(--debt-soft)}
+.card.ok{border-color:var(--cash);background:var(--cash-soft)}
+.card.wait{background:var(--none-soft)}
+.card b.h{display:block;margin-bottom:6px}
+.line{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
+.line span:last-child{white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums}
+.big{font-size:30px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.count{font-size:22px;font-weight:800}
+/* смужка з машинкою */
+.track{position:relative;height:34px;margin:6px 0 2px}
+.track i{position:absolute;left:0;right:0;top:20px;height:8px;border-radius:8px;background:var(--line)}
+.track u{position:absolute;left:0;top:20px;height:8px;border-radius:8px;background:var(--accent);transition:width .4s}
+.track s{position:absolute;top:0;font-size:24px;text-decoration:none;transform:translateX(-50%) scaleX(-1);transition:left .4s}
+.track em{position:absolute;right:-2px;top:2px;font-style:normal;font-size:18px}
+.bar{height:8px;border-radius:8px;background:var(--line);overflow:hidden;margin:6px 0 2px}
+.bar u{display:block;height:100%;background:var(--accent)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.two .card{margin:0;padding:12px}
+.two .v{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+/* рядок точки */
+.row{display:flex;align-items:stretch;gap:8px;margin:8px 0}
+.row .main{flex:1;min-width:0;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 14px;color:var(--ink);font:inherit}
+.row .main.debt{border-left:6px solid var(--debt)}
+.row .nm{font-weight:800;display:flex;justify-content:space-between;gap:10px}
+.row .nm span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .nm span:last-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+.row .sub{font-size:14px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .call{width:56px;border-radius:16px;border:1px solid var(--cash);background:var(--cash-soft);font-size:24px;display:grid;place-items:center;text-decoration:none;color:inherit}
+.row .call.off{border-color:var(--line);background:var(--none-soft);opacity:.5}
+.fold{width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:14px 2px;font:inherit;font-weight:700;color:var(--ink);display:flex;justify-content:space-between;margin-top:8px}
+.red{color:var(--debt)} .green{color:var(--cash)} .blue{color:var(--bank)}
+/* кнопки */
+button{cursor:pointer}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:58px;padding:10px 14px;border-radius:16px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:18px;font-weight:800;text-align:center;text-decoration:none;margin:8px 0}
+.btn.go{background:var(--cash);border-color:var(--cash);color:#fff}
+.btn.blue{background:var(--bank-soft);border-color:var(--bank);color:var(--bank)}
+.btn.red{background:var(--debt-soft);border-color:var(--debt);color:var(--debt)}
+.btn.warn{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.btn.left{justify-content:space-between;text-align:left}
+.btn[disabled]{opacity:.45}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pair .btn{margin:0}
+.dock{position:fixed;left:0;right:0;bottom:0;display:flex;gap:10px;padding:10px 16px calc(12px + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--line)}
+.dock .btn{margin:0;min-height:64px}
+.dock .back{flex:0 0 34%;font-weight:700;font-size:17px}
+.dock .go,.dock .wide{flex:1;font-size:19px}
+.chk{display:flex;align-items:center;gap:12px;width:100%;min-height:58px;padding:10px 14px;border-radius:16px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;margin:8px 0;text-align:left}
+.chk.on{border-color:var(--cash);background:var(--cash-soft)}
+.chk .box{width:28px;height:28px;border-radius:8px;border:2px solid var(--muted);display:grid;place-items:center;font-weight:900;flex:none}
+.chk.on .box{background:var(--cash);border-color:var(--cash);color:#fff}
+.chk .t{flex:1} .chk .s{font-weight:800;white-space:nowrap}
+input.sum{width:100%;height:64px;border-radius:16px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font:800 28px system-ui;padding:0 16px;text-align:right}
+input.sum:focus{outline:none;border-color:var(--accent)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.chip{padding:12px 16px;border-radius:999px;border:2px solid var(--line);background:var(--surface);font:inherit;font-weight:700;color:var(--ink)}
+.chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.x{border:0;background:none;font-size:20px;color:var(--debt);padding:4px 8px}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(100px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:14px 16px;border-radius:14px;font-weight:700;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s;z-index:9}
+.toast.on{opacity:1}
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;z-index:8}
+.sheet>div{width:100%;background:var(--bg);border-radius:20px 20px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom))}
+.center{text-align:center;padding:40px 0}
+.busy .btn,.busy .row .main,.busy .chk{pointer-events:none;opacity:.6}
+</style>
+</head>
+<body>
+<div id="main"><div class="center muted">Відкриваю рейс…</div></div>
+<div id="dock" class="dock" hidden></div>
+<div id="sheet"></div>
+<div id="toast" class="toast"></div>
+<script>
+"use strict";
+const tg = window.Telegram && window.Telegram.WebApp;
+const INIT = tg ? tg.initData : "";
+const S = {run:null, menu:null, scr:"load", i:null, open:{}, sel:[], sum:"", kind:null, items:null, item:null, qty:1, exp:"Нова пошта", done:null, cfg:{}};
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function money(x){
+  x = Math.round((+x || 0) * 100) / 100;
+  const whole = Math.abs(x - Math.round(x)) < 0.005;
+  let [a, b] = (whole ? String(Math.round(x)) : x.toFixed(2)).split(".");
+  a = a.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return a + (b ? "," + b : "") + " ₴";
+}
+function plural(n, one, few, many){
+  n = Math.abs(n); const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return one;
+  return d >= 2 && d <= 4 && !(h >= 12 && h <= 14) ? few : many;
+}
+function toast(t){ const e = $("toast"); e.textContent = t; e.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove("on"), 2200); }
+function buzz(kind){ try { tg && tg.HapticFeedback && (kind ? tg.HapticFeedback.notificationOccurred(kind) : tg.HapticFeedback.impactOccurred("light")); } catch(e){} }
+
+let busy = false;
+async function api(act, args){
+  if (busy) return null;
+  busy = true; document.body.classList.add("busy");
+  try {
+    const r = await fetch("api", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({init:INIT, act, args:args || {}})});
+    const j = await r.json();
+    if (j.cfg) S.cfg = j.cfg;
+    if ("run" in j) S.run = j.run;
+    if (j.menu) S.menu = j.menu;
+    if (j.shut) { S.shut = j.msg; S.run = null; S.scr = "shut"; render(); return null; }
+    if (!j.ok) { toast(j.msg || "Не вийшло"); buzz("error"); return null; }
+    return j;
+  } catch(e) { toast("Немає зв'язку. Спробуй ще раз."); buzz("error"); return null; }
+  finally { busy = false; document.body.classList.remove("busy"); }
+}
+const stop = () => S.run && S.run.stops[S.i];
+
+/* ---------- дзвінок ---------- */
+function telAttrs(num){
+  return S.cfg.call === "browser" ? `data-a="dial" data-n="${esc(num)}"` : `href="tel:${esc(num)}"`;
+}
+function callBtn(st, cls){
+  const nums = st.phones.length + (st.mphone ? 1 : 0);
+  if (!nums) return `<span class="${cls} off">📞</span>`;
+  if (nums === 1) return `<a class="${cls}" ${telAttrs(st.phones[0] || st.mphone)}>📞</a>`;
+  return `<a class="${cls}" data-a="who" data-i="${st.i}">📞</a>`;
+}
+function whoSheet(st){
+  let h = `<div class="sheet" data-a="unsheet"><div><b>${esc(st.name)}</b>`;
+  st.phones.forEach((p, k) => h += `<a class="btn go" ${telAttrs(p)}>📞 Салон${st.phones.length > 1 ? " " + (k + 1) : ""}</a>`);
+  if (st.mphone) h += `<a class="btn blue" ${telAttrs(st.mphone)}>📞 Менеджер ${esc(st.manager)}</a>`;
+  return h + `<button class="btn" data-a="unsheet">Закрити</button></div></div>`;
+}
+
+/* ---------- екрани ---------- */
+function vMenu(){
+  const m = S.menu || {sheets:[]};
+  let h = `<div class="top"><h1>🚚 Рейс</h1></div>`;
+  if (S.run) h += `<div class="card debt">Відкритий рейс закриється, відмітки в ньому не збережуться.</div>`;
+  if (m.note) h += `<div class="card">${esc(m.note)}</div>`;
+  h += m.sheets.length ? `<div class="muted">Яку путівку відкрити?</div>` : `<div class="card">Путівок на сьогодні ще немає.</div>`;
+  m.sheets.forEach(s => h += `<button class="btn left" data-a="start" data-id="${esc(s.id)}"><span>📄 ${esc(s.title)}</span><span>›</span></button>`);
+  h += `<button class="btn left" data-a="start" data-id="demo"><span>🎓 Навчальний рейс</span><span>›</span></button>`;
+  return [h, S.run ? [["back", "← Назад", "list"]] : []];
+}
+function rowHtml(st){
+  const sub = [];
+  if (st.debt > 0) sub.push(`<span class="red">🔴 борг ${money(st.debt)}</span>`);
+  if (st.free) sub.push("⚪ без оплати");
+  if (st.flags.length) sub.push("❗ " + esc(st.flags.join(", ")));
+  if (st.addr) sub.push(esc(st.addr));
+  const right = st.free && st.due <= 0 ? "⚪" : money(st.due);
+  return `<div class="row"><button class="main${st.debt > 0 ? " debt" : ""}" data-a="open" data-i="${st.i}">
+    <div class="nm"><span>${esc(st.name)}</span><span>${right}</span></div>
+    <div class="sub">${sub.join(" · ")}</div></button>${callBtn(st, "call")}</div>`;
+}
+function doneRow(st){
+  const s = st.status, ico = s.cash > 0 ? (s.kind === "paid" ? "🟢" : "🟡") : (s.reason === "acct" ? "💳" : s.kind === "given" ? "⚪" : "🔴");
+  return `<div class="row"><button class="main" data-a="open" data-i="${st.i}">
+    <div class="nm"><span>${ico} ${esc(st.name)}</span><span>${s.cash > 0 ? money(s.cash) : ""}</span></div>
+    <div class="sub">${esc(s.text)}</div></button></div>`;
+}
+function fold(key, label, n){
+  return `<button class="fold" data-a="fold" data-k="${key}"><span>${label} · ${n}</span><span>${S.open[key] ? "▲" : "▼"}</span></button>`;
+}
+function vList(){
+  const r = S.run, t = r.totals, st = r.stops;
+  const todo = st.filter(s => s.where === "route" && !s.status), done = st.filter(s => s.status);
+  const debt = st.filter(s => s.where === "debt" && !s.status).sort((a, b) => b.debt - a.debt), skip = st.filter(s => s.where === "skip");
+  const pct = t.stops ? Math.round(100 * (t.stops - todo.length) / t.stops) : 100;
+  let h = `<div class="top"><h1>${esc(r.title)}</h1><button class="icon" data-a="menu">⋯</button></div>
+  <div class="card"><div class="count">${todo.length ? `Лишилось ${todo.length} з ${t.stops}` : "Усі точки відмічено"}</div>
+    <div class="track"><i></i><u style="width:${pct}%"></u><s style="left:${Math.min(96, Math.max(4, pct))}%">🚚</s><em>🏁</em></div></div>
+  <div class="two"><div class="card"><div class="small muted">💰 Ще зібрати</div><div class="v">${money(r.left_sum)}</div></div>
+    <div class="card"><div class="small muted">💵 Зібрано</div><div class="v green">${money(t.cash)}</div></div></div>`;
+  todo.forEach(s => h += rowHtml(s));
+  if (!todo.length) h += `<div class="card ok">🟢 Можна здавати касу</div>`;
+  if (done.length) { h += fold("done", "Відмічено", done.length); if (S.open.done) done.forEach(s => h += doneRow(s)); }
+  if (debt.length) { h += fold("debt", "🔴 Борги поруч", debt.length); if (S.open.debt) debt.forEach(s => h += rowHtml(s)); }
+  if (skip.length) {
+    h += fold("skip", "⏸ Не їдуть сьогодні", skip.length);
+    if (S.open.skip) skip.forEach(s => h += `<div class="card wait"><b>${esc(s.name)}</b>${s.wait.map(w => `<div class="line"><span>№ ${esc(w.no)} · ${esc(w.why)} ${esc(w.when)}</span><span>${money(w.sum)}</span></div>`).join("")}</div>`);
+  }
+  return [h, [["back", "💸 Витрата", "expense"], ["go", "🏁 Здати касу", "close"]]];
+}
+function vCard(){
+  const r = S.run, st = stop(), pos = r.order.indexOf(st.i);
+  let h = pos >= 0 ? `<div class="small muted">Точка ${pos + 1} з ${r.order.length}</div><div class="bar"><u style="width:${100 * (pos + 1) / r.order.length}%"></u></div>` : `<div class="small muted">Борг без доставки</div>`;
+  h += st.free && st.due <= 0 ? `<div class="big">⚪ Без оплати</div><div class="muted">так написав менеджер</div>` : `<div class="big">${money(st.due)}</div><div class="muted">💰 до збору</div>`;
+  h += `<div class="card"><b class="h">📍 ${esc(st.name.toUpperCase())}</b>${st.addr ? `<div>${esc(st.addr)}</div>` : ""}
+    ${st.manager ? `<div class="muted">👤 ${esc(st.manager)}</div>` : ""}
+    ${st.comments.map(c => `<div>💬 «${esc(c)}»</div>`).join("")}
+    ${st.flags.length ? `<div class="red"><b>❗ ${esc(st.flags.join(", "))}</b></div>` : ""}
+    <div class="pair" style="margin-top:10px">${st.phones.length ? `<a class="btn go" ${telAttrs(st.phones[0])}>📞 Салон</a>` : `<span class="btn" style="opacity:.4">📞 Салон</span>`}
+    ${st.mphone ? `<a class="btn blue" ${telAttrs(st.mphone)}>📞 Менеджер</a>` : `<span class="btn" style="opacity:.4">📞 Менеджер</span>`}</div></div>`;
+  if (st.ride.length) h += `<div class="card"><b class="h">📦 Сьогодні${st.free ? " · без оплати" : ""}</b>
+    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.bo && !st.free ? " · без оплати" : ""}</span><span>${money(x.sum)}</span></div>`).join("")}
+    ${st.probs.map(p => `<div class="line"><span>⚠️ ${esc(p.text)}</span><span>−${money(p.cut)}</span></div>`).join("")}</div>`;
+  if (st.wait.length) h += `<div class="card wait"><b class="h">⏸ Не їде сьогодні</b>${st.wait.map(w => `<div class="line"><span>№ ${esc(w.no)} · ${esc(w.why)} ${esc(w.when)}</span><span>${money(w.sum)}</span></div>`).join("")}</div>`;
+  if (st.debts.length) h += `<div class="card debt"><div class="line"><b>🔴 Борг</b><span>${money(st.debt)}</span></div>
+    ${st.debts.map(d => `<div class="line"><span>${esc(d.name)}</span><span>${money(d.sum)}</span></div>`).join("")}</div>`;
+  else if (st.over > 0) h += `<div class="card ok">🟢 У клієнта переплата ${money(st.over)}</div>`;
+  else h += `<div class="card ok">🟢 Боргу немає</div>`;
+  const dock = [["back", "← Назад", "list"]];
+  if (st.status) {
+    const s = st.status;
+    h += `<div class="card ok"><div class="line"><b>✅ ${esc(s.text)}</b><span>${s.cash > 0 ? money(s.cash) : ""}</span></div>
+      ${s.alloc.map(a => `<div class="line"><span>№ ${esc(a.no)}</span><span>${money(a.paid)}${a.paid < a.of - 0.005 ? " з " + money(a.of) : ""}</span></div>`).join("")}</div>`;
+    if (!r.closed) dock.push(["blue wide", "✏️ Виправити", "fix"]);
+  } else {
+    if (st.due > 0) {
+      if (st.debt > 0 && st.today > 0) h += `<button class="btn left" data-a="today"><span>💵 Тільки сьогоднішнє</span><span>${money(st.today)}</span></button>`;
+      h += `<button class="btn left" data-a="pick"><span>💵 Інша сума, окремі накладні</span><span>›</span></button>`;
+    }
+    h += `<div class="pair">${st.due > 0 ? `<button class="btn red" data-a="reasons">🚫 Не забрав</button>` : ""}
+      ${st.ride.length ? `<button class="btn warn" data-a="problem">⚠️ Товар</button>` : ""}</div>`;
+    if (st.due > 0) dock.push(["go", `💵 Забрав усе<br>${money(st.due)}`, "all"]);
+    else if (st.free) dock.push(["go", "✅ Віддав товар", "given"]);
+  }
+  return [h, dock];
+}
+function alloc(st, amount){
+  let rest = Math.round(amount * 100) / 100;
+  return st.pay.map(p => { const paid = Math.min(rest, p.sum); rest = Math.round((rest - paid) * 100) / 100; return {name:p.name, paid, of:p.sum}; });
+}
+function typedSum(){ return parseFloat(String(S.sum).replace(/\s/g, "").replace(",", ".")) || 0; }
+function pickParts(){
+  const st = stop(), typed = typedSum();
+  const total = Math.min(st.due, typed ? typed : st.pay.reduce((a, p) => a + (S.sel.includes(p.k) ? p.sum : 0), 0));
+  let h = "";
+  if (typed) {
+    h += `<div class="card">${alloc(st, typed).map(a => `<div class="line"><span>${a.paid >= a.of - 0.005 ? "🟢" : a.paid > 0 ? "🟡" : "🔴"} ${esc(a.name)}</span><span>${money(a.paid)}${a.paid < a.of - 0.005 ? " з " + money(a.of) : ""}</span></div>`).join("")}</div>`;
+    if (typed > st.due + 0.005) h += `<div class="muted">Більше, ніж треба, на ${money(typed - st.due)}. Решту не записую.</div>`;
+  } else {
+    h += `<div class="small muted" style="margin-top:14px">Або познач накладні, за які дали гроші</div>`;
+    st.pay.forEach(p => h += `<button class="chk${S.sel.includes(p.k) ? " on" : ""}" data-a="tick" data-k="${p.k}"><span class="box">${S.sel.includes(p.k) ? "✓" : ""}</span><span class="t">${esc(p.name)}</span><span class="s">${money(p.sum)}</span></button>`);
+  }
+  return {total, body:h, dock:[["back", "← Назад", "card"], [total > 0 ? "go" : "go off", `💵 Записати<br>${money(total)}`, "savepick"]]};
+}
+function vPick(){
+  const st = stop(), p = pickParts();
+  return [`<b>📍 ${esc(st.name.toUpperCase())}</b><div class="big" id="pt">${money(p.total)}</div><div class="muted">💵 забрав з ${money(st.due)}</div>
+    <div class="small muted" style="margin-top:14px">Сума, яку дали</div><input class="sum" id="sum" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(S.sum)}">
+    <div id="pv">${p.body}</div>`, p.dock];
+}
+function updPick(){            // поле суми не чіпаємо, щоб клавіатура не стрибала
+  const p = pickParts();
+  $("pt").textContent = money(p.total); $("pv").innerHTML = p.body; drawDock(p.dock);
+}
+function vReasons(){
+  const st = stop();
+  return [`<b>📍 ${esc(st.name.toUpperCase())}</b><div class="big red">${money(st.due)}</div><div class="muted">🚫 не забрав. Чому?</div>
+    <button class="btn blue left" data-a="none" data-r="acct"><span>💳 Скине на рахунок</span><span>›</span></button>
+    <button class="btn left" data-a="none" data-r="mgr"><span>🤝 Домовилась з менеджером</span><span>›</span></button>
+    <button class="btn left" data-a="none" data-r="nomoney"><span>⏳ Нема грошей</span><span>›</span></button>
+    <button class="btn left" data-a="none" data-r="closed"><span>🔒 Зачинено, нікого нема</span><span>›</span></button>`, [["back", "← Назад", "card"]]];
+}
+function vBlock(){
+  const st = stop();
+  return [`<b>📍 ${esc(st.name.toUpperCase())}</b><div class="big red">⛔ ${money(st.debt)}</div><div class="muted">🔴 борг</div>
+    <div class="card debt"><b>Не залишай товар, поки не набереш менеджера.</b>${st.manager ? `<div>👤 ${esc(st.manager)}</div>` : ""}</div>
+    ${st.mphone ? `<a class="btn blue" ${telAttrs(st.mphone)}>📞 Набрати менеджера</a>` : `<div class="card">Телефону менеджера ще немає.</div>`}
+    <div class="muted" style="margin-top:14px">Що сказав менеджер?</div>
+    <button class="btn" data-a="leftyes">🤝 Дозволив залишити товар</button>
+    <button class="btn red" data-a="left">Товар не залишив</button>`,
+    [["back", "← Назад", "reasons"]]];
+}
+function vProblem(){
+  const st = stop(), P = S.run.problems;
+  return [`<b>📍 ${esc(st.name.toUpperCase())}</b><div class="count" style="margin:8px 0">⚠️ Що з товаром?</div>
+    ${Object.keys(P).map(k => `<button class="btn left" data-a="kind" data-k="${k}"><span>${esc(P[k][0].toUpperCase() + P[k].slice(1))}</span><span>›</span></button>`).join("")}`, [["back", "← Назад", "card"]]];
+}
+function vItems(){
+  const st = stop();
+  let h = `<b>📍 ${esc(st.name.toUpperCase())}</b><div class="count" style="margin:8px 0">⚠️ ${esc(S.run.problems[S.kind])}: яка позиція?</div>`;
+  (S.items || []).forEach((x, n) => h += `<button class="chk" data-a="item" data-n="${n}"><span class="t">${esc(x.name)}<div class="small muted">${x.qty} шт · ${money(x.price)}</div></span><span>›</span></button>`);
+  if (!(S.items || []).length) h += `<div class="card">Позицій немає.</div>`;
+  return [h, [["back", "← Назад", "problem"]]];
+}
+function vQty(){
+  const x = S.item;
+  return [`<div class="count">⚠️ ${esc(S.run.problems[S.kind])}</div><div class="card"><b>${esc(x.name)}</b><div class="muted">у накладній ${x.qty} шт · ${money(x.price)}</div></div>
+    <div class="muted">Скільки штук?</div>
+    <div class="pair" style="grid-template-columns:72px 1fr 72px;align-items:center"><button class="btn" data-a="qty" data-d="-1">−</button><div class="big" style="text-align:center">${S.qty}</div><button class="btn" data-a="qty" data-d="1">+</button></div>
+    <div class="card"><div class="line"><span>Мінус із накладної</span><span>${money(S.qty * x.price)}</span></div></div>`,
+    [["back", "← Назад", "items"], ["go", "Записати", "saveproblem"]]];
+}
+function vExpense(){
+  const r = S.run, kinds = ["Нова пошта", "Пальне", "Інше"];
+  let h = `<div class="count">💸 Витрата з каси рейсу</div><div class="muted">Що оплатив із зібраних грошей</div>
+    <div class="chips">${kinds.map(k => `<button class="chip${S.exp === k ? " on" : ""}" data-a="exp" data-k="${k}">${k}</button>`).join("")}</div>
+    <input class="sum" id="sum" inputmode="decimal" autocomplete="off" placeholder="0" value="${esc(S.sum)}">`;
+  if (r.expenses.length) h += `<div class="card"><b class="h">Уже записано</b>${r.expenses.map((x, k) => `<div class="line"><span>${esc(x.kind)}</span><span>${money(x.sum)} <button class="x" data-a="expdel" data-k="${k}">✕</button></span></div>`).join("")}</div>`;
+  return [h, [["back", "← Назад", "list"], ["go", "Записати", "saveexp"]]];
+}
+function vClose(){
+  const r = S.run, t = r.totals;
+  let h = `<div class="count">🏁 Здача каси</div><div class="big">${money(t.hand)}</div><div class="muted">💰 до здачі</div>
+    <div class="card"><div class="line"><span>💵 Готівка · ${t.paid_stops} ${plural(t.paid_stops, "точка", "точки", "точок")}</span><span>${money(t.cash)}</span></div>
+    ${r.expenses.map(x => `<div class="line"><span>− ${esc(x.kind)}</span><span>${money(x.sum)}</span></div>`).join("")}</div>
+    <div class="card"><div class="line"><span>🔴 Не забрано</span><span>${money(t.unpaid)}</span></div>
+    ${Object.keys(t.why).map(k => `<div class="line"><span class="muted">${esc(k)}</span><span>${t.why[k]}</span></div>`).join("")}
+    <div class="line"><span>📦 Товар повернувся</span><span>${t.back}</span></div><div class="line"><span>⚠️ Проблеми з товаром</span><span>${t.probs}</span></div></div>`;
+  if (t.left) { h += `<div class="card debt"><b>Ще ${t.left} ${plural(t.left, "точка", "точки", "точок")} без відмітки.</b> Касу здати не можна.</div>`; return [h, [["back wide", "← До списку", "list"]]]; }
+  return [h, [["back", "← Назад", "list"], ["go", `🏁 Здаю касу<br>${money(t.hand)}`, "hand"]]];
+}
+function vDone(){
+  const d = S.done;
+  return [`<div class="center"><div style="font-size:64px">🏁</div><div class="count">Касу здано</div><div class="big">${money(d.hand)}</div><div class="muted">${esc(d.title)}</div></div>`, [["go", "Готово", "exit"]]];
+}
+function vShut(){ return [`<div class="center"><div style="font-size:56px">🌙</div><p class="count">${esc(S.shut)}</p></div>`, []]; }
+const V = {shut:vShut, menu:vMenu, list:vList, card:vCard, pick:vPick, reasons:vReasons, block:vBlock, problem:vProblem, items:vItems, qty:vQty, expense:vExpense, close:vClose, done:vDone};
+const BACK = {card:"list", pick:"card", reasons:"card", block:"reasons", problem:"card", items:"problem", qty:"items", expense:"list", close:"list"};
+
+function drawDock(dock){
+  $("dock").hidden = !dock.length;
+  $("dock").innerHTML = dock.map(([cls, label, act]) => {
+    const nav = cls.startsWith("back") && BACK[S.scr] === act || act === "list";
+    return `<button class="btn ${cls}${dock.length === 1 ? " wide" : ""}" data-a="${nav ? "go" : act}" data-to="${act}" ${cls.includes("off") ? "disabled" : ""}><span>${label}</span></button>`;
+  }).join("");
+}
+function render(keep){
+  if (!["done", "menu", "shut"].includes(S.scr) && !S.run) S.scr = "menu";
+  const y = keep ? window.scrollY : 0, focus = keep && document.activeElement && document.activeElement.id === "sum";
+  const [html, dock] = V[S.scr]();
+  $("main").innerHTML = html;
+  drawDock(dock);
+  window.scrollTo(0, y);
+  if (focus) { const i = $("sum"); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+  try { if (tg) { (S.scr === "list" || S.scr === "menu" && !S.run || S.scr === "done") ? tg.BackButton.hide() : tg.BackButton.show(); } } catch(e){}
+}
+function go(scr, i){ S.scr = scr; if (i != null) S.i = +i; render(); }
+
+/* ---------- дії ---------- */
+async function mark(act, args, msg){
+  const j = await api(act, Object.assign({i:S.i}, args));
+  if (j) { buzz("success"); toast(msg || "Записано"); go("list"); } else render(true);
+}
+const A = {
+  go: d => go(d.to),
+  expense: () => { S.sum = ""; go("expense"); },
+  close: () => go("close"),
+  menu: async () => { if (await api("menu")) go("menu"); },
+  start: async d => { if (await api("start", {id:d.id})) { S.open = {}; go("list"); } },
+  fold: d => { S.open[d.k] = !S.open[d.k]; render(true); },
+  open: async d => { S.i = +d.i; S.sel = []; S.sum = ""; const st = stop(); if (st.where !== "skip") { await api("open", {i:S.i}); go("card"); } },
+  who: d => { $("sheet").innerHTML = whoSheet(S.run.stops[+d.i]); },
+  unsheet: () => { $("sheet").innerHTML = ""; },
+  dial: d => { const u = location.origin + "/t/" + String(d.n).replace(/\D/g, ""); tg && tg.openLink ? tg.openLink(u) : window.open(u); },
+  all: () => mark("all"),
+  today: () => mark("today"),
+  given: () => mark("given"),
+  fix: async () => { if (await api("fix", {i:S.i})) { toast("Відмітку знято"); render(); } },
+  pick: () => { S.sel = []; S.sum = ""; go("pick"); },
+  tick: d => { const k = +d.k; S.sel = S.sel.includes(k) ? S.sel.filter(x => x !== k) : S.sel.concat(k); updPick(); },
+  savepick: () => { const typed = typedSum(); typed ? mark("amount", {sum:typed}) : mark("pick", {ks:S.sel}); },
+  reasons: () => go("reasons"),
+  none: d => { const st = stop(); if (d.r === "nomoney" && st.debt > 0 && st.ride.length) return go("block"); mark("none", {reason:d.r}); },
+  left: () => mark("none", {reason:"nomoney", left:false}),
+  leftyes: () => mark("none", {reason:"nomoney", left:true}),
+  problem: () => go("problem"),
+  kind: async d => { S.kind = d.k; const j = await api("items", {i:S.i}); if (j) { S.items = j.items; go("items"); } },
+  item: d => { S.item = S.items[+d.n]; S.qty = 1; S.item.qty <= 1 ? A.saveproblem() : go("qty"); },
+  qty: d => { S.qty = Math.max(1, Math.min(S.item.qty, S.qty + +d.d)); render(true); },
+  saveproblem: async () => { const x = S.item; if (await api("problem", {i:S.i, kind:S.kind, ii:x.ii, li:x.li, qty:S.qty})) { toast("Записано"); go("card"); } },
+  exp: d => { S.exp = d.k; render(true); },
+  saveexp: async () => { if (await api("expense", {sum:S.sum, kind:S.exp})) { S.sum = ""; toast("Записано"); go("list"); } },
+  expdel: async d => { await api("expense_del", {k:+d.k}); render(true); },
+  hand: async () => { const j = await api("close"); if (j) { S.done = j.done; buzz("success"); go("done"); } },
+  exit: () => { tg && tg.close ? tg.close() : go("menu"); },
+};
+document.addEventListener("click", ev => {
+  const el = ev.target.closest("[data-a]");
+  if (!el || el.disabled || busy) return;
+  if (el.dataset.a === "unsheet" && ev.target !== el && !ev.target.closest("button")) return;
+  buzz();
+  const f = A[el.dataset.a];
+  if (f) f(el.dataset);
+});
+document.addEventListener("input", ev => { if (ev.target.id === "sum") { S.sum = ev.target.value.replace(/[^\d.,\s]/g, ""); if (S.scr === "pick") updPick(); } });
+
+(async function boot(){
+  try {
+    if (tg) {
+      tg.ready(); tg.expand();
+      document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light";
+      const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+      tg.setHeaderColor && tg.setHeaderColor(bg); tg.setBackgroundColor && tg.setBackgroundColor(bg);
+      tg.BackButton.onClick(() => { if (BACK[S.scr]) go(BACK[S.scr]); else if (S.scr === "menu" && S.run) go("list"); });
+    }
+  } catch(e){}
+  const j = await api("state");
+  if (S.scr === "shut") return;
+  if (!j && !S.run && !S.menu) { $("main").innerHTML = `<div class="center"><div style="font-size:48px">🔒</div><p><b>Рейс відкривається кнопкою в боті.</b></p></div>`; return; }
+  go(S.run ? "list" : "menu");
+})();
+</script>
+</body>
+</html>

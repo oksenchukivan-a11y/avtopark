@@ -1,6 +1,7 @@
 """Читання 1С через посередника (той самий, що в конекторах): JSON-RPC, тільки читання."""
 import json
 import os
+import socket
 
 import aiohttp
 
@@ -24,7 +25,9 @@ async def call(tool: str, **args):
             "params": {"name": tool, "arguments": {k: v for k, v in args.items() if v is not None}}}
     try:
         timeout = aiohttp.ClientTimeout(total=60)
-        async with aiohttp.ClientSession(timeout=timeout) as s:
+        # тільки IPv4: посередник пускає за списком адрес, а в ньому IPv4-адреса сервера бота
+        conn = aiohttp.TCPConnector(family=socket.AF_INET)
+        async with aiohttp.ClientSession(timeout=timeout, connector=conn) as s:
             async with s.post(URL, json=body) as r:
                 if r.status != 200:
                     raise OneCError(f"посередник 1С відповів HTTP {r.status}")

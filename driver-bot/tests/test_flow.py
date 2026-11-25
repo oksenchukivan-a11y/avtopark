@@ -207,6 +207,7 @@ SHEET = {"Ref_Key": "s1", "Number": "000000777", "Date": "2026-11-17T13:03:08", 
     {"Контрагент_Key": "c4", "Документ_Key": Z, "Долг": 2283.42, "СуммаДокументов": 0},
     {"Контрагент_Key": "c5", "Документ_Key": Z, "Долг": -0.99, "СуммаДокументов": 0}]}
 DATA = {
+    "InformationRegister_КонтактнаяИнформация": [{"Объект": "c1", "Представление": "050 111-22-33, 0661112233"}],
     "Document_ПутевойЛист": [SHEET],
     "Document_РеализацияТоваровУслуг": [
         {"Ref_Key": "i1", "Number": "ТЕСТ0000786", "Date": "2026-11-17T12:08:47", "СуммаДокумента": 1068.0,
@@ -242,7 +243,7 @@ async def fake_1c(request):
     else:
         flt = a.get("filter", "")
         rows = [r for r in DATA[a["object"]]
-                if any(f"guid'{v}'" in flt for v in (r.get("Ref_Key"), r.get("Контрагент_Key")) if v)]
+                if any(f"guid'{v}'" in flt for v in (r.get("Ref_Key"), r.get("Контрагент_Key"), r.get("Объект")) if v)]
         keep = set(a["select"].split(","))
         rows = [{k: v for k, v in r.items() if k in keep} for r in rows]
     text = f"Рядків: {len(rows)}\n" + json.dumps(rows, ensure_ascii=False)
@@ -264,12 +265,13 @@ def test_load_run_from_1c():
             by = {s["name"]: s for s in run["stops"]}
             one = by["Салон Один"]
             assert one["addr"] == "вул. Перша 20" and one["manager"] == "Тестова Олена" and one["where"] == "route"
+            assert one["phones"] == ["+380501112233", "+380661112233"] and by["Майстер Два"]["phones"] == []
             assert one["inv"][0]["no"] == "786" and "DEBT" in one["inv"][0]["tags"] and one["sheet_debt"] == 830.0
             assert by["Майстер Два"]["inv"][0]["tags"] == ["BO"]
             three = by["Перукарня Три"]
             assert three["where"] == "skip" and three["inv"][0]["deliver"] == "2026-11-20"
             assert by["Салон Чотири"]["where"] == "debt"
-            assert [s["where"] for s in run["stops"]].count("none") == 1          # копійчане сальдо сховано
+            assert [s["where"] for s in run["stops"]] == ["route", "route", "skip", "debt"]   # копійчане сальдо сховано
             await handlers.load_debts(one)                                        # борг по накладних, без сьогоднішньої
             assert one["debts"] == [{"ref": "old1", "no": "419", "date": "2026-11-10", "sum": 830.0}]
             items = await handlers.load_items(one)

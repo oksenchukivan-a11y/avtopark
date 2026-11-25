@@ -23,6 +23,7 @@ def init():
             id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, ts TEXT, tg_id INTEGER,
             action TEXT, payload TEXT);
         CREATE TABLE IF NOT EXISTS reys_phones(name TEXT PRIMARY KEY, phone TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS reys_screen(tg_id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER);
         """)
 
 
@@ -73,3 +74,19 @@ def set_phone(name, phone_no):
     with db() as c:
         c.execute("INSERT INTO reys_phones(name, phone) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET phone=excluded.phone",
                   (name, phone_no))
+
+
+def screen(tg_id):
+    """Повідомлення з кнопкою «Відкрити рейс» — єдине, що модуль тримає в чаті."""
+    with db() as c:
+        r = c.execute("SELECT chat_id, msg_id FROM reys_screen WHERE tg_id=?", (tg_id,)).fetchone()
+    return (r["chat_id"], r["msg_id"]) if r else (None, None)
+
+
+def set_screen(tg_id, chat_id, msg_id):
+    with db() as c:
+        if msg_id is None:
+            c.execute("DELETE FROM reys_screen WHERE tg_id=?", (tg_id,))
+        else:
+            c.execute("INSERT INTO reys_screen(tg_id, chat_id, msg_id) VALUES(?,?,?) ON CONFLICT(tg_id) "
+                      "DO UPDATE SET chat_id=excluded.chat_id, msg_id=excluded.msg_id", (tg_id, chat_id, msg_id))
