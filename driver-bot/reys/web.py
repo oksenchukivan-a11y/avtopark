@@ -253,7 +253,8 @@ async def a_items(uid, a):
     items = await hd.load_items(st)
     store.save(run_id, run)
     return {"items": [{"ii": x[0], "li": x[1], "name": x[2], "qty": x[3], "price": x[4],
-                       "no": st["inv"][x[0]]["no"], "mgr": st["inv"][x[0]].get("manager", "")} for x in items]}
+                       "no": st["inv"][x[0]]["no"], "mgr": engine.clean(st["inv"][x[0]].get("manager", ""))}
+                      for x in items]}
 
 
 def _one_problem(st, kind, row):

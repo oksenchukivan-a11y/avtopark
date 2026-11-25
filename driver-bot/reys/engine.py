@@ -142,10 +142,16 @@ def totals(run):
             "left": len(open_stops(run)), "stops": len(route(run))}
 
 
+def clean(name) -> str:
+    """Ім'я з 1С без зайвих пробілів: «Прізвище  Ім'я » → «Прізвище Ім'я»."""
+    return " ".join((name or "").split())
+
+
 def _uniq(names):
-    out = []
-    for n in names:
-        if n and n not in out:
+    out, seen = [], set()
+    for n in map(clean, names):
+        if n and n.casefold() not in seen:
+            seen.add(n.casefold())
             out.append(n)
     return out
 

@@ -298,3 +298,28 @@ def test_call_buttons_in_chat():
         text, btns = tg.last_screen(await tg.tap("r:o:0"))                           # телефону немає — одна кнопка-пояснення
         assert "r:cl:0" in btns and not [m for m in await tg.tap("r:cl:0") if isinstance(m, SendContact)]
     asyncio.run(go())
+
+
+def test_manager_names_as_written_in_1c():
+    """1С пише напрямок першим словом і не стежить за пробілами: телефон і підпис від цього не залежать."""
+    import sqlite3
+    import tempfile
+    from reys import engine, view
+    store.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
+    store.init()
+    store.set_phone("Манікюр Тестова  Олена", "+380500000009")              # подвійний пробіл, як у 1С
+    people = store.people()
+    for raw in ("Манікюр Тестова Олена", "манікюр тестова олена ", "Манікюр  Тестова  Олена"):
+        m = view.mgr_view(raw, people)
+        assert (m["label"].casefold(), m["phone"], m["name"]) == ("олена · манікюр", "+380500000009", " ".join(raw.split()))
+    assert view.mgr_view("Niceme Тестов Сергій ", people)["label"] == "Сергій · волосся"
+    assert view.mgr_view("офис 1", people)["label"] == "офис 1" and view.mgr_view("Т.Т Місто", people)["label"] == "Т.Т Місто"
+    store.set_direction("niceme тестов сергій", "манікюр")                  # таблиця перекриває префікс
+    assert view.mgr_view("Niceme Тестов Сергій", store.people())["label"] == "Сергій · манікюр"
+    st = {"inv": [{"tags": [], "manager": "Манікюр Тестова  Олена"}, {"tags": [], "manager": "Манікюр Тестова Олена "}],
+          "debts": [{"sum": 50, "manager": "Niceme Тестов Сергій "}], "sheet_debt": 50, "manager": ""}
+    assert engine.managers(st) == ["Манікюр Тестова Олена", "Niceme Тестов Сергій"]     # той самий — один раз
+    with sqlite3.connect(store.DB_PATH) as c:                                # старі «сирі» записи переходять під ключ
+        c.execute("INSERT INTO reys_phones(name, phone) VALUES('Стара  Назва ', '+380500000001')")
+    store.init()
+    assert store.phone("стара назва") == "+380500000001"

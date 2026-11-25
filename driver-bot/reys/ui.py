@@ -79,7 +79,7 @@ def card_text(st, head=""):
     who = [f"📍 <b>{h(st['name'].upper())}</b>", h(st["addr"])]
     people = store.people()
     for n in e.managers(st):
-        who.append(f"👤 {h(mgr_view(n, people)['label'] if people.get(n, ('', ''))[1] else n)}")
+        who.append(f"👤 {h(mgr_view(n, people)['label'])}")
     seen = set()
     for i in st["inv"]:
         c = driver_comment(i["comment"])
@@ -152,7 +152,7 @@ def call_rows(st, i, names=None):
     """Кнопка дзвінка на кожного менеджера, у кого є телефон. Немає жодного — одна кнопка, яка це пояснить."""
     people, every = store.people(), e.managers(st)
     out = [[(f"📞 {mgr_view(n, people)['label']}"[:40], f"r:cl:{i}:{every.index(n)}")]
-           for n in (names or every) if n in every and people.get(n, ("", ""))[0]]
+           for n in (names or every) if n in every and mgr_view(n, people)["phone"]]
     return out or [[("📞 Менеджер", f"r:cl:{i}")]]
 
 

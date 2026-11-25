@@ -26,6 +26,24 @@ def init():
         CREATE TABLE IF NOT EXISTS reys_dirs(name TEXT PRIMARY KEY, dir TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reys_screen(tg_id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER);
         """)
+        _rekey(c, "reys_phones", "phone")
+        _rekey(c, "reys_dirs", "dir")
+
+
+def key(name: str) -> str:
+    """Ім'я менеджера як ключ: без зайвих пробілів і без різниці великих-малих літер.
+    У 1С імена пишуть по-різному («Прізвище  Ім'я », з подвійним пробілом чи пробілом у кінці)."""
+    return " ".join((name or "").split()).casefold()
+
+
+def _rekey(c, table, col):
+    """Старі записи під «сирими» іменами переводимо під нормалізований ключ."""
+    for r in c.execute(f"SELECT name, {col} FROM {table}").fetchall():
+        k = key(r["name"])
+        if k != r["name"]:
+            c.execute(f"DELETE FROM {table} WHERE name=?", (r["name"],))
+            if k:
+                c.execute(f"INSERT OR IGNORE INTO {table}(name, {col}) VALUES(?,?)", (k, r[col]))
 
 
 def now():
@@ -67,14 +85,14 @@ def log(run_id, tg_id, action, **payload):
 
 def phone(name):
     with db() as c:
-        r = c.execute("SELECT phone FROM reys_phones WHERE name=?", (name,)).fetchone()
+        r = c.execute("SELECT phone FROM reys_phones WHERE name=?", (key(name),)).fetchone()
     return r["phone"] if r else None
 
 
 def set_phone(name, phone_no):
     with db() as c:
         c.execute("INSERT INTO reys_phones(name, phone) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET phone=excluded.phone",
-                  (name, phone_no))
+                  (key(name), phone_no))
 
 
 def screen(tg_id):
@@ -96,7 +114,7 @@ def set_screen(tg_id, chat_id, msg_id):
 def direction(name):
     """Напрямок менеджера («манікюр», «волосся») — налаштування в базі, не в коді."""
     with db() as c:
-        r = c.execute("SELECT dir FROM reys_dirs WHERE name=?", (name,)).fetchone()
+        r = c.execute("SELECT dir FROM reys_dirs WHERE name=?", (key(name),)).fetchone()
     return r["dir"] if r else ""
 
 
@@ -104,13 +122,13 @@ def set_direction(name, value):
     with db() as c:
         if value:
             c.execute("INSERT INTO reys_dirs(name, dir) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET dir=excluded.dir",
-                      (name, value))
+                      (key(name), value))
         else:
-            c.execute("DELETE FROM reys_dirs WHERE name=?", (name,))
+            c.execute("DELETE FROM reys_dirs WHERE name=?", (key(name),))
 
 
 def people():
-    """{ім'я: (телефон, напрямок)} одним запитом — щоб екран рейсу не ходив у базу за кожною точкою."""
+    """{ключ імені: (телефон, напрямок)} одним запитом — щоб екран рейсу не ходив у базу за кожною точкою."""
     out = {}
     with db() as c:
         for r in c.execute("SELECT name, phone FROM reys_phones"):

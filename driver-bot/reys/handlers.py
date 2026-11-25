@@ -402,7 +402,9 @@ async def cmd_dir(m: Message, command: CommandObject):
     name, sep, value = (command.args or "").partition("=")
     name, value = name.strip(), value.strip()[:20]
     if not name or not sep:
-        rows = [f"{n} — {d or 'напрямок не задано'}" for n, (ph, d) in sorted(store.people().items())]
+        people = store.people()
+        rows = [f"{v['name']} — {v['dir'] or 'напрямок не задано'}{'' if v['phone'] else ' · телефону немає'}"
+                for v in (ui.mgr_view(n, people) for n in manager_names())]
         return await m.answer("Приклад: /reys_dir Петренко Олена = волосся\n\n" + "\n".join(rows))
     store.set_direction(name, value)
     await m.answer(f"Записав: {name} — {value or 'без напрямку'}")

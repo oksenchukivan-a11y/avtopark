@@ -1,4 +1,6 @@
 """Готує рейс для екрана застосунку: усі суми й підписи рахує сервер, екран тільки малює."""
+import os
+
 from . import engine as e
 from . import store
 from .tags import LABELS, driver_comment
@@ -18,15 +20,22 @@ def _debt_name(d):
     return f"№ {d['no']}" + (f" від {dm(d['date'])}" if d.get("date") else "")
 
 
-def short_name(name: str) -> str:
-    """«Прізвище Ім'я» → «Ім'я»: так менеджера називає водій."""
-    parts = name.split()
-    return parts[1] if len(parts) > 1 else name
+def prefixes():
+    """Напрямок, який 1С сама пише першим словом в імені менеджера. Перекривається таблицею напрямків."""
+    raw = os.environ.get("REYS_PREFIXES", "Манікюр=манікюр,Niceme=волосся")
+    return {k.strip().casefold(): v.strip() for k, _, v in (x.partition("=") for x in raw.split(",")) if k.strip() and v.strip()}
 
 
 def mgr_view(name, people):
-    phone, direction = people.get(name, ("", ""))
-    short = short_name(name) if direction else name      # скорочуємо тільки тих, кому задано напрямок
+    """Менеджер для кнопки дзвінка: «Манікюр Прізвище Ім'я» → підпис «Ім'я · манікюр»."""
+    name = e.clean(name)
+    phone, direction = people.get(store.key(name), ("", ""))
+    words = name.split()
+    by_prefix = prefixes().get(words[0].casefold(), "") if len(words) > 1 else ""
+    if by_prefix:
+        words = words[1:]                               # префікс-напрямок у підписі не повторюємо
+    direction = direction or by_prefix
+    short = (words[1] if len(words) > 1 else " ".join(words)) if direction else " ".join(words)
     return {"name": name, "short": short, "dir": direction, "phone": phone or "",
             "label": short + (f" · {direction}" if direction else "")}
 
@@ -55,9 +64,9 @@ def stop_view(st, i, people):
         "comments": comments, "flags": [LABELS[t] for t in flags], "free": free,
         "due": e.due(st), "today": e.today_due(st), "debt": e.debt_due(st),
         "ride": [{"ref": x["ref"], "no": x["no"], "sum": x["sum"], "bo": "BO" in x["tags"],
-                  "mgr": x.get("manager", ""), "who": mgr_view(x.get("manager", ""), people)["short"] if many else ""} for x in ride],
+                  "mgr": e.clean(x.get("manager", "")), "who": mgr_view(x.get("manager", ""), people)["short"] if many else ""} for x in ride],
         "wait": wait,
-        "debts": [{"name": _debt_name(d), "sum": d["sum"], "mgr": d.get("manager", ""),
+        "debts": [{"name": _debt_name(d), "sum": d["sum"], "mgr": e.clean(d.get("manager", "")),
                    "who": mgr_view(d.get("manager", ""), people)["short"] if many else ""}
                   for d in sorted(e.debts(st), key=lambda d: d.get("date", ""))],
         "pay": [{"k": k, "name": _debt_name(p) if p["old"] else f"№ {p['no']} · сьогодні", "sum": p["sum"],
