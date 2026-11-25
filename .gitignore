@@ -1,3 +1,5 @@
 github_token.txt
 flespi_token.txt
 *token*.txt
+__pycache__/
+.pytest_cache/
