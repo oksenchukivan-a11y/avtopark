@@ -28,17 +28,26 @@ HITS: dict = {}              # хто скільки запитів зробив
 RATE = 90                    # запитів на людину за хвилину; рейс стільки не потребує
 
 
-def hours():
-    """Робочі години з REYS_HOURS («9-18»). Поза ними рейс не відкривається ні в чаті, ні тут."""
-    m = re.fullmatch(r"\s*(\d{1,2})\s*-\s*(\d{1,2})\s*", os.environ.get("REYS_HOURS", "9-18"))
-    a, b = (int(m.group(1)), int(m.group(2))) if m else (9, 18)
-    return (a, b) if 0 <= a < b <= 24 else (9, 18)
+def hours(uid=None):
+    """Робочі години з REYS_HOURS. Формат як у сторожа бота: «9-18» для всіх або свій графік
+    кожному — «111=8-17,222=9-19»; можна й разом: «9-18,111=8-17». Не розібралось — 9–18."""
+    common, own = None, None
+    for part in os.environ.get("REYS_HOURS", "").split(","):
+        m = re.fullmatch(r"\s*(?:(\d+)\s*=)?\s*(\d{1,2})\s*-\s*(\d{1,2})\s*", part)
+        if not m or not 0 <= int(m.group(2)) < int(m.group(3)) <= 24:
+            continue
+        span = (int(m.group(2)), int(m.group(3)))
+        if m.group(1) is None:
+            common = span
+        elif uid is not None and int(m.group(1)) == uid:
+            own = span
+    return own or common or (9, 18)
 
 
 def working(uid, now: datetime = None) -> bool:
     if uid == hd.ADMIN:
         return True
-    a, b = hours()
+    a, b = hours(uid)
     return a <= (now or datetime.now(hd.TZ)).hour < b
 
 
@@ -338,7 +347,7 @@ async def api(request: web.Request):
         log.warning("reys: забагато запитів від %s", uid)
         return _json({"ok": False, "msg": "Забагато запитів. Зачекай хвилину."}, 429)
     if not working(uid):
-        a, b = hours()
+        a, b = hours(uid)
         return _json({"ok": False, "shut": True, "msg": f"Бот працює з {a}:00 до {b}:00"})
     fn = ACTIONS.get(act)
     if not fn or not isinstance(args, dict):

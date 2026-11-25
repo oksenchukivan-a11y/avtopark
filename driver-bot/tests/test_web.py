@@ -162,7 +162,11 @@ def test_hours_and_rate_limit():
                 day = dt.datetime(2026, 11, 25, 12, 0, tzinfo=handlers.TZ)
                 assert web.working(ME, night) and web.working(333, day) and not web.working(333, night)
                 os.environ["REYS_HOURS"] = "8-20"
-                assert web.hours() == (8, 20)
+                assert web.hours() == (8, 20) and web.hours(333) == (8, 20)
+                os.environ["REYS_HOURS"] = "333=8-17, 444=9-19"                # свій графік кожному
+                assert web.hours(333) == (8, 17) and web.hours(444) == (9, 19) and web.hours(555) == (9, 18)
+                os.environ["REYS_HOURS"] = "7-20,333=8-17,сміття,5=30-2"
+                assert web.hours(333) == (8, 17) and web.hours(555) == (7, 20) and web.hours(5) == (7, 20)
                 os.environ["REYS_HOURS"] = "0-1" if dt.datetime.now(handlers.TZ).hour >= 1 else "23-24"
                 code, j = await app.call("state", who=333)                 # водій поза годинами
                 assert j["shut"] and "run" not in j and "menu" not in j
