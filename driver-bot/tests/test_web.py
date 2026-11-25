@@ -237,3 +237,15 @@ def test_returns_as_a_list():
             left = (await app.call("items", i=3))[1]["items"]             # лишились одна фарба й один шампунь
             assert [(x["name"], x["qty"]) for x in left] == [(items[0]["name"], 1), (items[2]["name"], 1)]
     asyncio.run(go())
+
+
+def test_nightly_robot_finds_nothing():
+    """Той самий робот, що щоночі ганяє рейс на сервері: сценарії, гроші, захист, хаос, коди кнопок."""
+    import subprocess
+    import sys
+    import tempfile
+    here = os.path.dirname(os.path.abspath(__file__))
+    env = {**os.environ, "REYS_ROBOT_OUT": tempfile.mkdtemp()}
+    out = subprocess.run([sys.executable, os.path.join(here, "reys_robot.py")], capture_output=True, text=True,
+                         env=env, timeout=300)
+    assert out.returncode == 0 and "Знахідок: 0" in out.stdout, out.stdout[-2000:] + out.stderr[-2000:]
