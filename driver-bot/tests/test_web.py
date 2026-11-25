@@ -179,3 +179,38 @@ def test_hours_and_rate_limit():
     finally:
         os.environ.pop("REYS_TESTERS", None)
         os.environ.pop("REYS_HOURS", None)
+
+
+def test_manager_phone_from_shared_contact():
+    import datetime as dt
+    from aiogram.types import Chat, Contact, Message, Update, User
+
+    async def go():
+        async with App() as app:
+            tg = app.tg
+            await app.call("start", id="demo")                       # з рейсу бот знає імена менеджерів
+
+            async def share(who):
+                tg.uid += 1
+                m = Message(message_id=tg.uid, date=dt.datetime.now(), chat=Chat(id=who, type="private"),
+                            from_user=User(id=who, is_bot=False, first_name="Тест"),
+                            contact=Contact(phone_number="+380 50 111 22 33", first_name="Оля"))
+                before = len(tg.session.sent)
+                res = await tg.dp.feed_update(tg.bot, Update(update_id=tg.uid, message=m))
+                return tg.session.sent[before:], res
+            sent, _ = await share(ME)
+            ask = [m for m in sent if isinstance(m, SendMessage)][-1]
+            names = [b.text for row in ask.reply_markup.inline_keyboard for b in row]
+            assert "+380501112233" in ask.text and "Оля" in names and any(isinstance(m, DeleteMessage) for m in sent)
+            tg.screen = 2000
+            sent = await tg.tap(f"r:ph:{names.index('Оля')}")
+            assert store.phone("Оля") == "+380501112233" and any(isinstance(m, DeleteMessage) for m in sent)
+            stops = (await app.call("state"))[1]["run"]["stops"]
+            assert [s["mphone"] for s in stops if s["manager"] == "Оля"][0] == "+380501112233"
+            os.environ["REYS_TESTERS"] = "333"                       # тестувальник-водій номери не вносить
+            handlers.TESTERS.add(333)
+            sent, _ = await share(333)
+            assert not [m for m in sent if isinstance(m, SendMessage)]
+            handlers.TESTERS.discard(333)
+            os.environ.pop("REYS_TESTERS", None)
+    asyncio.run(go())

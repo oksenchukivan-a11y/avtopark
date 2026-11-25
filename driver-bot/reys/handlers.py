@@ -27,6 +27,7 @@ REAL = "Document_РеализацияТоваровУслуг"
 class Reys(StatesGroup):
     amount = State()
     expense = State()
+    phone = State()
 
 
 def ids_from_env(name: str) -> set:
@@ -301,6 +302,59 @@ async def cmd_tel(m: Message, command: CommandObject):
         return
     store.set_phone(parts[0].strip(), "+38" + digits[-10:])
     await m.answer(f"Записав: {parts[0].strip()} — +38{digits[-10:]}")
+
+
+# ---------- телефони менеджерів без набору з клавіатури ----------
+# У 1С їх немає. Адмін пересилає боту контакт із телефонної книжки і одним дотиком каже, чий він.
+
+def manager_names():
+    """Менеджери з останніх рейсів — так, як їх показує картка точки."""
+    names = set()
+    with store.db() as c:
+        for r in c.execute("SELECT data FROM reys_runs ORDER BY id DESC LIMIT 15"):
+            try:
+                names |= {s.get("manager", "") for s in json.loads(r["data"])["stops"]}
+            except (ValueError, KeyError):
+                pass
+    names.discard("")
+    return sorted(names)
+
+
+@router.message(F.contact, lambda m: m.from_user.id == ADMIN)
+async def msg_contact(m: Message, state: FSMContext):
+    nums = norm_phones(m.contact.phone_number)
+    names = manager_names()
+    try:
+        await m.delete()
+    except TelegramBadRequest:
+        pass
+    if not nums or not names:
+        why = "Номер не розпізнано." if not nums else "Спершу відкрий будь-який рейс — тоді знатиму імена менеджерів."
+        return await m.answer(why, reply_markup=markup([[("Зрозуміло", "r:ph:x")]]))
+    names.sort(key=lambda n: (bool(store.phone(n)), n))             # без телефону — зверху
+    who = " ".join(x for x in (m.contact.first_name, m.contact.last_name) if x)
+    rows = [[(("✓ " if store.phone(n) else "") + n[:40], f"r:ph:{k}")] for k, n in enumerate(names[:20])]
+    rows.append([("← Не записувати", "r:ph:x")])
+    await state.set_state(Reys.phone)
+    await state.update_data(phone=nums[0], names=names[:20])
+    await m.answer(f"📞 <b>{nums[0]}</b>\n<blockquote>{who}</blockquote>\nЧий це номер?", reply_markup=markup(rows),
+                   parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("r:ph:"))
+async def cb_phone(cb: CallbackQuery, state: FSMContext):
+    data, k = await state.get_data(), cb.data.split(":")[2]
+    await state.clear()
+    text = "Не записано"
+    if k.isdigit() and data.get("phone") and int(k) < len(data.get("names", [])):
+        name = data["names"][int(k)]
+        store.set_phone(name, data["phone"])
+        text = f"Записав: {name}"
+    await cb.answer(text)
+    try:
+        await cb.message.delete()                                   # у чаті нічого не лишається
+    except TelegramBadRequest:
+        pass
 
 
 async def ctx(cb: CallbackQuery):
