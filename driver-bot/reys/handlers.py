@@ -263,7 +263,7 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
         store.set_screen(m.from_user.id, None, None)
     if web.ready():                                             # рейс відкривається застосунком
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text="🚚 Продовжити рейс" if run else "🚚 Відкрити рейс", web_app=WebAppInfo(url=web.url()))]])
+            text="🚚 Продовжити рейс" if run else "🚚 Відкрити рейс", web_app=WebAppInfo(url=web.launch_url()))]])
         sent = await m.answer("🚚 <b>Рейс</b>", reply_markup=kb, parse_mode="HTML")
         store.set_screen(m.from_user.id, m.chat.id, sent.message_id)
         return
@@ -651,17 +651,25 @@ async def cb_problem(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith(("r:pk:", "r:pg:")))
 async def cb_items(cb: CallbackQuery):
+    """Рішення власника 26.11: повернення й відмова — списком. Позначаєш кілька позицій, потім «Готово»."""
     run_id, run, i, st = await stop_ctx(cb)
     if not run:
         return
     p = parts(cb)
     try:
-        items = await load_items(st)
+        await load_items(st)
     except onec.OneCError as e:
         return await cb.answer(f"Не вдалося прочитати накладну: {e}", show_alert=True)
+    if p[1] == "pk":
+        st["psel"] = {}
     store.save(run_id, run)
     await cb.answer()
-    await show(cb, *ui.screen_items(st, i, p[3], [tuple(x) for x in items], int(p[4]) if p[1] == "pg" else 0))
+    await show_list(cb, st, i, p[3], int(p[4]) if p[1] == "pg" else 0)
+
+
+async def show_list(cb, st, i, kind, page):
+    await show(cb, *ui.screen_items(st, i, kind, [tuple(x) for x in st.get("items") or []], page,
+                                    st.get("psel") or {}))
 
 
 def find_item(st, ii, li):
@@ -680,10 +688,18 @@ async def cb_item(cb: CallbackQuery):
     it = find_item(st, int(p[4]), int(p[5]))
     if not it:
         return await cb.answer("Позицію не знайдено", show_alert=True)
+    page = int(p[6]) if len(p) > 6 else 0
+    sel = st.setdefault("psel", {})
+    k = f"{it[0]}:{it[1]}"
     await cb.answer()
-    if it[3] <= 1:
-        return await apply_problem(cb, run_id, run, i, st, p[3], it, 1)
-    await show(cb, *ui.screen_qty(st, i, p[3], it[0], it[1], it[2], it[3]))
+    if len(p) > 7 and p[7] == "q" and it[3] > 1:     # олівець: не всі штуки
+        return await show(cb, *ui.screen_qty(st, i, p[3], it[0], it[1], it[2], it[3], page, k in sel))
+    if k in sel:                                     # дотик ставить у список усю кількість або знімає
+        sel.pop(k)
+    else:
+        sel[k] = it[3]
+    store.save(run_id, run)
+    await show_list(cb, st, i, p[3], page)
 
 
 @router.callback_query(F.data.startswith("r:pq:"))
@@ -693,19 +709,64 @@ async def cb_qty(cb: CallbackQuery):
         return
     p = parts(cb)
     it = find_item(st, int(p[4]), int(p[5]))
-    if it:
-        await cb.answer()
-        await apply_problem(cb, run_id, run, i, st, p[3], it, float(p[6]))
-
-
-async def apply_problem(cb, run_id, run, i, st, kind, it, qty):
-    inv = st["inv"][it[0]]
-    cut = engine.add_problem(st, inv["ref"], kind, it[2], qty, it[4])
-    st["items"] = [x for x in st["items"] if not (x[0] == it[0] and x[1] == it[1])]
-    store.log(run_id, cb.from_user.id, "problem", stop=st["name"], inv=inv["no"], kind=kind, item=it[2],
-              qty=qty, cut=cut)
+    if not it:
+        return await cb.answer("Позицію не знайдено", show_alert=True)
+    sel = st.setdefault("psel", {})
+    k = f"{it[0]}:{it[1]}"
+    if p[6] == "x":
+        sel.pop(k, None)
+    else:
+        sel[k] = min(float(p[6]), it[3])
     store.save(run_id, run)
+    await cb.answer()
+    await show_list(cb, st, i, p[3], int(p[7]) if len(p) > 7 else 0)
+
+
+@router.callback_query(F.data.startswith("r:pa:"))
+async def cb_all(cb: CallbackQuery):
+    """Позначити всі позиції повною кількістю або зняти всі."""
+    run_id, run, i, st = await stop_ctx(cb)
+    if not run:
+        return
+    allk = {f"{x[0]}:{x[1]}": x[3] for x in st.get("items") or []}
+    st["psel"] = {} if set(st.get("psel") or {}) == set(allk) else allk
+    store.save(run_id, run)
+    await cb.answer()
+    await show_list(cb, st, i, parts(cb)[3], 0)
+
+
+@router.callback_query(F.data.startswith("r:px:"))
+async def cb_done(cb: CallbackQuery):
+    run_id, run, i, st = await stop_ctx(cb)
+    if not run:
+        return
+    kind, sel = parts(cb)[3], st.get("psel") or {}
+    if not sel or kind not in engine.PROBLEMS:
+        return await cb.answer("Нічого не позначено", show_alert=True)
+    n = 0
+    for k, qty in list(sel.items()):
+        ii, li = map(int, k.split(":"))
+        it = find_item(st, ii, li)
+        if it:
+            apply_one(cb.from_user.id, run_id, st, kind, it, qty)
+            n += 1
+    st["psel"] = {}
+    store.save(run_id, run)
+    await cb.answer(f"Записано позицій: {n}")
     await show(cb, *card(run, i))
+
+
+def apply_one(uid, run_id, st, kind, it, qty):
+    """Записує одну позицію. Якщо повернули частину, залишок лишається в списку на своєму місці."""
+    inv = st["inv"][it[0]]
+    qty = min(qty, it[3])
+    cut = engine.add_problem(st, inv["ref"], kind, it[2], qty, it[4])
+    left = round(it[3] - qty, 3)
+    rest = [it[0], it[1], it[2], left, it[4]]
+    st["items"] = [(rest if x[0] == it[0] and x[1] == it[1] else x) for x in st["items"]
+                   if left > 0 or not (x[0] == it[0] and x[1] == it[1])]
+    store.log(run_id, uid, "problem", stop=st["name"], inv=inv["no"], kind=kind, item=it[2], qty=qty, cut=cut)
+    return cut
 
 
 # ---------- витрата і здача каси ----------

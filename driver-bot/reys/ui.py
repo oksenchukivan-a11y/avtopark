@@ -200,11 +200,19 @@ def screen_problem(st, i):
              [("← Назад", f"r:o:{i}")]])
 
 
-def screen_items(st, i, kind, items, page=0, per=8):
-    """items — [(номер накладної в точці, номер позиції, назва, кількість, ціна)]."""
-    text = (f"📍 <b>{h(st['name'].upper())}</b>\n⚠️ <b>{e.PROBLEMS[kind].capitalize()}</b>\n" + q("Яка позиція?"))
-    part = items[page * per:(page + 1) * per]
-    rows = [[(f"{n[:30]} · {qty:g} шт · {e.money(p)}", f"r:pi:{i}:{kind}:{ii}:{li}")] for ii, li, n, qty, p in part]
+def screen_items(st, i, kind, items, page=0, sel=None, per=8):
+    """items — [(номер накладної в точці, номер позиції, назва, кількість, ціна)]. Кілька позицій — одним «Готово»."""
+    sel = sel or {}
+    text = (f"📍 <b>{h(st['name'].upper())}</b>\n⚠️ <b>{e.PROBLEMS[kind].capitalize()}</b>\n"
+            + q("Познач усі позиції, потім «Готово».", "Не всі штуки — олівець ✏️ поруч."))
+    rows = []
+    for ii, li, n, qty, p in items[page * per:(page + 1) * per]:
+        k = f"{ii}:{li}"
+        lab = f"✅ {n[:24]} · {sel[k]:g} з {qty:g} шт" if k in sel else f"▫️ {n[:24]} · {qty:g} шт · {e.money(p)}"
+        row = [(lab, f"r:pi:{i}:{kind}:{ii}:{li}:{page}")]       # один дотик — уся кількість у списку
+        if qty > 1:
+            row.append(("✏️", f"r:pi:{i}:{kind}:{ii}:{li}:{page}:q"))
+        rows.append(row)
     nav = []
     if page:
         nav.append(("◀", f"r:pg:{i}:{kind}:{page - 1}"))
@@ -212,16 +220,26 @@ def screen_items(st, i, kind, items, page=0, per=8):
         nav.append(("▶", f"r:pg:{i}:{kind}:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([("← Назад", f"r:o:{i}")])
+    if len(items) > 1:
+        allsel = len(sel) == len(items)
+        rows.append([("☐ Зняти всі" if allsel else "☑️ Позначити всі", f"r:pa:{i}:{kind}")])
+    last = [("← Назад", f"r:o:{i}")]
+    if sel:
+        price = {f"{ii}:{li}": p for ii, li, n, qty, p in items}
+        total = sum(qv * price.get(k, 0) for k, qv in sel.items())
+        last.append((f"✔️ Готово · {len(sel)} поз · {e.money(total)}", f"r:px:{i}:{kind}"))
+    rows.append(last)                                   # головна дія внизу праворуч, «назад» ліворуч
     return text, rows
 
 
-def screen_qty(st, i, kind, ii, li, name, qty):
+def screen_qty(st, i, kind, ii, li, name, qty, page=0, chosen=False):
     opts = [n for n in (1, 2, 3) if n < qty] + [qty]
+    rows = [[(f"{n:g}" if n != qty else f"усі {n:g}", f"r:pq:{i}:{kind}:{ii}:{li}:{n:g}:{page}") for n in opts]]
+    if chosen:
+        rows.append([("✖ Прибрати зі списку", f"r:pq:{i}:{kind}:{ii}:{li}:x:{page}")])
+    rows.append([("← До списку", f"r:pg:{i}:{kind}:{page}")])
     return (f"📍 <b>{h(st['name'].upper())}</b>\n⚠️ <b>{e.PROBLEMS[kind].capitalize()}</b>\n"
-            + q(h(name), "Скільки штук?"),
-            [[(f"{n:g}" if n != qty else f"усі {n:g}", f"r:pq:{i}:{kind}:{ii}:{li}:{n:g}") for n in opts],
-             [("← Назад", f"r:o:{i}")]])
+            + q(h(name), "Скільки штук?"), rows)
 
 
 def screen_skip(run):

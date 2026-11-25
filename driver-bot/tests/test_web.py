@@ -71,7 +71,7 @@ def test_launcher_button_opens_app():
             sent, _ = await app.tg.text("/reys")
             msg = [m for m in sent if isinstance(m, SendMessage)][-1]
             btn = msg.reply_markup.inline_keyboard[0][0]
-            assert btn.web_app.url == "https://reys.example.test/" and "Відкрити" in btn.text
+            assert btn.web_app.url.startswith("https://reys.example.test/?v=") and "Відкрити" in btn.text
             assert store.screen(ME)[1]                                               # кнопку запам'ятали
             sent, _ = await app.tg.text("/reys")                                     # друга — стара зникає
             assert sum(isinstance(m, DeleteMessage) for m in sent) == 2
@@ -213,4 +213,27 @@ def test_manager_phone_from_shared_contact():
             assert not [m for m in sent if isinstance(m, SendMessage)]
             handlers.TESTERS.discard(333)
             os.environ.pop("REYS_TESTERS", None)
+    asyncio.run(go())
+
+
+def test_returns_as_a_list():
+    """Рішення власника 26.11: кілька позицій повернення одним «Готово»; частина — залишок лишається."""
+    async def go():
+        async with App() as app:
+            await app.call("start", id="demo")
+            items = (await app.call("items", i=3))[1]["items"]            # фарба ×2, окисник ×1, шампунь ×3
+            assert [x["qty"] for x in items] == [2, 1, 3]
+            before = (await app.call("state"))[1]["run"]["stops"][3]["due"]
+            rows = [{"ii": x["ii"], "li": x["li"], "qty": q} for x, q in zip(items, (1, 1, 2))]
+            bad = rows[:1] + [{"ii": 0, "li": 99, "qty": 1}]              # одна з позицій не існує — нічого не пишемо
+            assert not (await app.call("problem", i=3, kind="refuse", rows=bad))[1]["ok"]
+            assert not (await app.call("problem", i=3, kind="refuse", rows=rows[:1] * 2))[1]["ok"]
+            assert not (await app.call("problem", i=3, kind="refuse", rows=[{**rows[0], "qty": 5}]))[1]["ok"]
+            assert (await app.call("state"))[1]["run"]["stops"][3]["due"] == before
+            code, j = await app.call("problem", i=3, kind="refuse", rows=rows)
+            st = j["run"]["stops"][3]
+            assert j["ok"] and j["n"] == 3 and len(st["probs"]) == 3
+            assert st["due"] == round(before - (185 + 240 + 2 * 320), 2)
+            left = (await app.call("items", i=3))[1]["items"]             # лишились одна фарба й один шампунь
+            assert [(x["name"], x["qty"]) for x in left] == [(items[0]["name"], 1), (items[2]["name"], 1)]
     asyncio.run(go())

@@ -77,6 +77,9 @@ class Tg:
         await self.dp.feed_update(self.bot, Update(update_id=self.uid, callback_query=cb))
         return self.session.sent[before:]
 
+    def sel(self, i):
+        return store.open_run(ME)[1]["stops"][i].get("psel")
+
     def last_screen(self, sent):
         scr = [m for m in sent if isinstance(m, (EditMessageText, SendMessage))]
         assert scr, f"екран не оновився: {sent}"
@@ -117,9 +120,23 @@ def test_full_demo_run_by_buttons():
         await tg.tap("r:o:3")
         await tg.tap("r:pr:3")
         text, btns = tg.last_screen(await tg.tap("r:pk:3:miss"))
-        assert "r:pi:3:miss:0:1" in btns
-        text, btns = tg.last_screen(await tg.tap("r:pi:3:miss:0:1"))       # Окисник, 1 шт — одразу записано
+        assert "r:pi:3:miss:0:1:0" in btns and "r:pa:3:miss" in btns and "r:px:3:miss" not in btns
+        text, btns = tg.last_screen(await tg.tap("r:pi:3:miss:0:1:0"))     # Окисник, 1 шт — позначено
+        assert "r:px:3:miss" in btns and btns[-2:] == ["r:o:3", "r:px:3:miss"]    # «Готово» внизу праворуч
+        text, btns = tg.last_screen(await tg.tap("r:pi:3:miss:0:0:0"))     # Фарба, 2 шт — один дотик, уся кількість
+        assert tg.sel(3) == {"0:1": 1, "0:0": 2} and "r:pi:3:miss:0:0:0:q" in btns and "r:pi:3:miss:0:1:0:q" not in btns
+        text, btns = tg.last_screen(await tg.tap("r:pi:3:miss:0:0:0:q"))   # олівець — не всі штуки
+        assert "Скільки штук" in text and "r:pq:3:miss:0:0:1:0" in btns and "r:pq:3:miss:0:0:x:0" in btns
+        await tg.tap("r:pq:3:miss:0:0:1:0")
+        assert tg.sel(3)["0:0"] == 1
+        await tg.tap("r:pi:3:miss:0:0:0")                                   # другий дотик знімає позначку
+        assert tg.sel(3) == {"0:1": 1}
+        text, btns = tg.last_screen(await tg.tap("r:px:3:miss"))            # записано тільки окисник
         assert "не вистачає: Окисник 6 % 1 л ×1" in text and "1 380 ₴ до збору" in text
+        await tg.tap("r:pt:3")                                              # вибір накладних не плутається з товаром
+        text, btns = tg.last_screen(await tg.tap("r:tg:3:0"))
+        assert "r:pd:3" in btns
+        await tg.tap("r:o:3")
         await tg.tap("r:no:3")
         await tg.tap("r:rs:3:mgr")
         # Д: боржник без грошей → спершу дзвінок, потім «товар не залишив»

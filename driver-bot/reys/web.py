@@ -67,6 +67,15 @@ def url() -> str:
     return os.environ.get("REYS_WEB_URL", "").strip()
 
 
+def launch_url() -> str:
+    """Адреса для кнопки: з міткою версії сторінки, щоб Telegram не відкривав застарілу копію."""
+    try:
+        v = int(os.path.getmtime(PAGE))
+    except OSError:
+        v = 0
+    return url() + ("&" if "?" in url() else "?") + f"v={v}"
+
+
 def secret_for(token: str) -> bytes:
     return hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
 
@@ -244,23 +253,33 @@ async def a_items(uid, a):
     return {"items": [{"ii": x[0], "li": x[1], "name": x[2], "qty": x[3], "price": x[4]} for x in items]}
 
 
+def _one_problem(st, kind, row):
+    try:
+        it = hd.find_item(st, int(row.get("ii")), int(row.get("li")))
+        qty = float(row.get("qty"))
+    except (TypeError, ValueError, AttributeError):
+        it, qty = None, 0
+    if not it or not 0 < qty <= it[3]:
+        raise Bad("Позицію не знайдено. Відкрий список заново.")
+    return it, qty
+
+
 async def a_problem(uid, a):
+    """Одна позиція або список (rows) — список записується весь або не записується зовсім."""
     run_id, run = _run(uid)
     st = _stop(run, a, free=True)
     kind = a.get("kind")
-    try:
-        it = hd.find_item(st, int(a.get("ii")), int(a.get("li")))
-        qty = float(a.get("qty"))
-    except (TypeError, ValueError):
-        it, qty = None, 0
-    if kind not in engine.PROBLEMS or not it or not 0 < qty <= it[3]:
-        raise Bad("Позицію не знайдено")
-    inv = st["inv"][it[0]]
-    cut = engine.add_problem(st, inv["ref"], kind, it[2], qty, it[4])
-    st["items"] = [x for x in st["items"] if not (x[0] == it[0] and x[1] == it[1])]
-    store.log(run_id, uid, "problem", stop=st["name"], inv=inv["no"], kind=kind, item=it[2], qty=qty, cut=cut)
+    rows = a.get("rows") if isinstance(a.get("rows"), list) else [a]
+    if kind not in engine.PROBLEMS or not rows or len(rows) > 200:
+        raise Bad("Нічого не позначено")
+    picked = [_one_problem(st, kind, r) for r in rows]
+    if len({(it[0], it[1]) for it, _ in picked}) != len(picked):
+        raise Bad("Позиція позначена двічі")
+    for it, qty in picked:
+        hd.apply_one(uid, run_id, st, kind, it, qty)
+    st.pop("psel", None)
     store.save(run_id, run)
-    return {}
+    return {"n": len(picked)}
 
 
 async def a_expense(uid, a):
