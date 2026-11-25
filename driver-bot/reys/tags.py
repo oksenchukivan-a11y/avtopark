@@ -66,3 +66,14 @@ def delivery_date(comment: str, ordered: date):
 def short_comment(comment: str, limit: int = 140) -> str:
     c = re.sub(r"\s+", " ", comment or "").strip()
     return c if len(c) <= limit else c[: limit - 1] + "…"
+
+
+_PROMO = re.compile(r"акц|знижк|скидк|подар|пробн|сошет|каталог|\d\s*\+\s*\d|\d\s*%|%\s*\d|^-?\d+$"
+                    r"|^факт$|провести сьогодні|скинь фото|напиши суму")
+
+
+def driver_comment(comment: str, limit: int = 140) -> str:
+    """Лишає з коментаря менеджера те, що стосується доставки; акції й знижки — це для складу."""
+    parts = [x.strip(" .") for x in re.split(r"[,;\n]|\.(?!\d)", comment or "")]   # крапку в «20.11» не чіпаємо
+    keep = [x for x in parts if x and not _PROMO.search(x.lower())]
+    return short_comment(", ".join(keep), limit)

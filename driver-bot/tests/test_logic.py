@@ -2,7 +2,7 @@
 from datetime import date
 
 from reys import build, engine as e, ui
-from reys.tags import delivery_date, tags_of
+from reys.tags import delivery_date, driver_comment, tags_of
 
 MON = date(2026, 11, 16)          # понеділок
 
@@ -124,12 +124,12 @@ def test_screens_have_expected_buttons():
     r = run()
     text, rows = ui.screen_list(r)
     labels = [b[0] for row in rows for b in row]
-    assert "лишилось 5 з 5" in text and any("Борги поруч (1)" in x for x in labels)
+    assert "Лишилось <b>5</b> з 5 точок" in text and any("Борги поруч (1)" in x for x in labels)
     assert any("Не їдуть (2)" in x for x in labels) and not any("Майстер Е" in x for x in labels)
     b = stop(r, "Салон Б")
     text, rows = ui.screen_card(b, 1)
     labels = [x[0] for row in rows for x in row]
-    assert "БОРГ 3 600 ₴" in text and "накл. 1101 від 04.11" in text
+    assert "Борг 3 600 ₴" in text and "№ 1101 від 04.11 · 2 000 ₴" in text and "<blockquote>" in text
     assert labels[:3] == ["💵 Забрав усе — 4 100 ₴", "💵 Тільки сьогоднішнє — 500 ₴", "💵 Інша сума або окремі накладні"]
     v = stop(r, "Студія В")
     labels = [x[0] for row in ui.screen_card(v, 2)[1] for x in row]
@@ -149,3 +149,19 @@ def test_callback_data_fits_telegram_limit():
         for row in scr[1]:
             for label, data in row:
                 assert len(data.encode()) <= 64 and label
+
+
+def test_driver_sees_only_delivery_part_of_comment():
+    assert driver_comment("15%") == "" and driver_comment("акція 10+5") == "" and driver_comment("Акція Нуб, факт") == ""
+    assert driver_comment("знижка , подзвонити за 15 хвилин") == "подзвонити за 15 хвилин"
+    assert driver_comment("акція 10+5.доставка в салон. підкласти сошетки") == "доставка в салон"
+    assert driver_comment("3+1, скинь фото накладної пліз, на долорес, подарунок якщо є, без оплати") == "на долорес, без оплати"
+    assert driver_comment("якщо закрито, зателефонувати 0959263936") == "якщо закрито, зателефонувати 0959263936"
+
+
+def test_no_phone_like_runs_of_digits_in_card():
+    import re
+    r = run()
+    for i, s in enumerate(r["stops"]):
+        text = re.sub(r"<[^>]+>", "", ui.screen_card(s, i, "Точка 1 з 5")[0])
+        assert not re.search(r"\d{3,}\s[—-]\s\d", text), text      # «1251 — 2 061» Telegram підсвічує як телефон

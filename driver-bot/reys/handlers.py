@@ -200,10 +200,16 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
     await state.clear()
     run_id, run = store.open_run(m.from_user.id)
     arg = (command.args or "").strip()
+    for mid in (m.message_id, (run or {}).get("screen")):       # у чаті лишається один екран рейсу
+        if mid:
+            try:
+                await m.bot.delete_message(m.chat.id, mid)
+            except TelegramBadRequest:
+                pass
     rows = []
     if run:
         rows.append([("▶️ Продовжити рейс", "r:l")])
-    text = "🧾 <b>Рейс</b> (пробний режим — бачиш тільки ти)\n"
+    text = "🧾 <b>Рейс</b>\n<blockquote>Пробний режим — бачиш тільки ти</blockquote>\n"
     if onec.configured():
         try:
             day = datetime.strptime(arg + f".{today().year}", "%d.%m.%Y").date() if arg else today()
@@ -316,6 +322,13 @@ def parts(cb):
     return cb.data.split(":")
 
 
+def card(run, i):
+    """Картка точки з рядком «Точка 3 з 8»."""
+    order = [k for k, s in enumerate(run["stops"]) if s["where"] == "route"]
+    head = f"Точка {order.index(i) + 1} з {len(order)}" if i in order else "Борг без доставки"
+    return ui.screen_card(run["stops"][i], i, head)
+
+
 async def stop_ctx(cb: CallbackQuery):
     run_id, run = await ctx(cb)
     if not run:
@@ -342,7 +355,7 @@ async def cb_open(cb: CallbackQuery, state: FSMContext):
     await load_debts(st)
     st.pop("sel", None)
     store.save(run_id, run)
-    await show(cb, *ui.screen_card(st, i))
+    await show(cb, *card(run, i))
 
 
 @router.callback_query(F.data.startswith(("r:all:", "r:tod:", "r:gv:")))
@@ -368,7 +381,7 @@ async def cb_fix(cb: CallbackQuery):
     st["status"] = None
     store.save(run_id, run)
     await cb.answer("Відмітку знято")
-    await show(cb, *ui.screen_card(st, i))
+    await show(cb, *card(run, i))
 
 
 @router.callback_query(F.data.startswith("r:pt:"))
@@ -578,7 +591,7 @@ async def apply_problem(cb, run_id, run, i, st, kind, it, qty):
     store.log(run_id, cb.from_user.id, "problem", stop=st["name"], inv=inv["no"], kind=kind, item=it[2],
               qty=qty, cut=cut)
     store.save(run_id, run)
-    await show(cb, *ui.screen_card(st, i))
+    await show(cb, *card(run, i))
 
 
 # ---------- витрата і здача каси ----------

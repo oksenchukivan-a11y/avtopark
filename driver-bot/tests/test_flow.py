@@ -3,6 +3,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import tempfile
 
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "t.db")
@@ -79,7 +80,7 @@ class Tg:
     def last_screen(self, sent):
         scr = [m for m in sent if isinstance(m, (EditMessageText, SendMessage))]
         assert scr, f"екран не оновився: {sent}"
-        return scr[-1].text, [b.callback_data for row in (scr[-1].reply_markup.inline_keyboard
+        return re.sub(r"<[^>]+>", "", scr[-1].text), [b.callback_data for row in (scr[-1].reply_markup.inline_keyboard
                                                         if scr[-1].reply_markup else []) for b in row]
 
 
@@ -88,15 +89,15 @@ def test_full_demo_run_by_buttons():
         tg = Tg()
         sent, _ = await tg.text("/reys")
         text, btns = tg.last_screen(sent)
-        assert "пробний режим" in text and "r:demo" in btns
+        assert "Пробний режим" in text and "r:demo" in btns
         tg.screen = 1001
         text, btns = tg.last_screen(await tg.tap("r:demo"))
-        assert "лишилось 5 з 5" in text and "r:o:0" in btns
+        assert "Лишилось 5 з 5 точок" in text and "r:o:0" in btns
         # А: заплатив усе одним дотиком
         text, btns = tg.last_screen(await tg.tap("r:o:0"))
-        assert "САЛОН А" in text and "r:all:0" in btns
+        assert "САЛОН А" in text and "Точка 1 з 5" in text and "1 501 ₴ до збору" in text and "r:all:0" in btns
         text, _ = tg.last_screen(await tg.tap("r:all:0"))
-        assert "лишилось 4 з 5" in text and "Зібрано: 1 501 ₴" in text
+        assert "Лишилось 4 з 5" in text and "Зібрано 1 501 ₴" in text
         # Б: дав круглу суму 2500 при боргу
         await tg.tap("r:o:1")
         text, btns = tg.last_screen(await tg.tap("r:pt:1"))
@@ -104,10 +105,10 @@ def test_full_demo_run_by_buttons():
         await tg.tap("r:sm:1")
         sent, _ = await tg.text("2500")
         text, btns = tg.last_screen(sent)
-        assert "накл. 1101 — закрита" in text and "накл. 1158 — частково: 500 ₴ з 1 600 ₴" in text
+        assert "🟢 № 1101 закрита" in text and "🟡 № 1158 частково · 500 ₴ з 1 600 ₴" in text
         assert any(type(m).__name__ == "DeleteMessage" for m in sent)       # набране число прибрано зі стрічки
         text, _ = tg.last_screen(await tg.tap("r:sy:1"))
-        assert "Зібрано: 4 001 ₴" in text
+        assert "Зібрано 4 001 ₴" in text
         # В: без оплати
         text, btns = tg.last_screen(await tg.tap("r:o:2"))
         assert "Без оплати" in text and "r:gv:2" in btns and "r:all:2" not in btns
@@ -118,7 +119,7 @@ def test_full_demo_run_by_buttons():
         text, btns = tg.last_screen(await tg.tap("r:pk:3:miss"))
         assert "r:pi:3:miss:0:1" in btns
         text, btns = tg.last_screen(await tg.tap("r:pi:3:miss:0:1"))       # Окисник, 1 шт — одразу записано
-        assert "не вистачає: Окисник 6 % 1 л ×1" in text and "До збору: 1 380 ₴" in text
+        assert "не вистачає: Окисник 6 % 1 л ×1" in text and "1 380 ₴ до збору" in text
         await tg.tap("r:no:3")
         await tg.tap("r:rs:3:mgr")
         # Д: боржник без грошей → спершу дзвінок, потім «товар не залишив»
@@ -127,16 +128,16 @@ def test_full_demo_run_by_buttons():
         text, btns = tg.last_screen(await tg.tap("r:rs:4:nomoney"))
         assert "Не залишай товар" in text and "r:dn:4" in btns
         text, _ = tg.last_screen(await tg.tap("r:dn:4"))
-        assert "лишилось 0 з 5" in text
+        assert "Лишилось 0 з 5" in text and "можна здавати касу" in text
         # витрата на Нову пошту з каси
         await tg.tap("r:ex")
         sent, _ = await tg.text("683,50")
-        assert "лишилось 0 з 5" in tg.last_screen(sent)[0]
+        assert "Лишилось 0 з 5" in tg.last_screen(sent)[0]
         text, btns = tg.last_screen(await tg.tap("r:cz"))
-        assert "Готівка: 4 001 ₴" in text and "До здачі: 3 317,50 ₴" in text and "r:hd" in btns
+        assert "Готівка 4 001 ₴ · 2 точки" in text and "3 317,50 ₴ до здачі" in text and "− Нова пошта 683,50 ₴" in text and "r:hd" in btns
         text, btns = tg.last_screen(await tg.tap("r:hd"))
-        assert "🧾" in text and "Салон Б: 2 500 ₴ (№1101 2 000 ₴, №1158 500 ₴)" in text and btns == []
-        assert "Барбершоп Г: домовилась з менеджером" in text and "не вистачає — Окисник" in text
+        assert "🧾" in text and "Салон Б · 2 500 ₴\n№ 1101 · 2 000 ₴, № 1158 · 500 ₴" in text and btns == []
+        assert "Барбершоп Г · домовилась з менеджером" in text and "не вистачає — Окисник" in text and "3 317,50 ₴ здано" in text
         assert store.open_run(ME) == (None, None)                           # рейс закрито
         with store.db() as c:
             acts = [r[0] for r in c.execute("SELECT action FROM reys_events ORDER BY id")]
@@ -188,9 +189,9 @@ def test_snapshot_of_real_sheet_is_offered_and_opens():
         assert "Справжні путівки з 1С" in text and "r:sn:2026-11-25_1301_8389" in btns
         tg.screen = 1001
         text, btns = tg.last_screen(await tg.tap("r:sn:2026-11-25_1301_8389"))
-        assert "Місто 25.11 · друк 13:01 · лишилось 5 з 5" in text
+        assert "Місто 25.11 · друк 13:01" in text and "Лишилось 5 з 5" in text
         text, btns = tg.last_screen(await tg.tap("r:o:1"))
-        assert "БОРГ 3 600 ₴" in text                              # борги по накладних узято зі знімка
+        assert "Борг 3 600 ₴" in text and "№ 1101 від 04.11 · 2 000 ₴" in text   # борги по накладних узято зі знімка
         assert await tg.tap("r:sn:../evil") is not None and store.open_run(ME)[1]["title"].startswith("Місто")
     asyncio.run(go())
 
