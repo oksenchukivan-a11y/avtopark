@@ -793,6 +793,23 @@ async def cb_all(cb: CallbackQuery):
     await show_list(cb, st, i, parts(cb)[3], 0)
 
 
+@router.callback_query(F.data.startswith("r:po:"))
+async def cb_other(cb: CallbackQuery):
+    """Рішення власника 26.11: «Інший товар» — без пошуку позиції, сума не змінюється."""
+    run_id, run, i, st = await stop_ctx(cb)
+    if not run:
+        return
+    kind = parts(cb)[3]
+    if kind not in engine.OTHER_KINDS or st["status"]:
+        return await cb.answer("Не вийшло — відкрий точку заново", show_alert=True)
+    engine.add_other(st, kind)
+    store.log(run_id, cb.from_user.id, "problem", stop=st["name"], inv="—", kind=kind, item=engine.OTHER_ITEM,
+              qty=0, cut=0)
+    store.save(run_id, run)
+    await cb.answer("Записано: інший товар. Склад і менеджер розберуться")
+    await show(cb, *card(run, i))
+
+
 @router.callback_query(F.data.startswith("r:px:"))
 async def cb_done(cb: CallbackQuery):
     run_id, run, i, st = await stop_ctx(cb)

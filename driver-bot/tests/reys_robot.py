@@ -204,6 +204,32 @@ async def scenario_list():
     finding("збій", "Товар списком", "у демо-рейсі немає точки з двома позиціями — сценарій не перевірено")
 
 
+async def scenario_other():
+    """Рішення власника 26.11: «Інший товар» — один дотик, сума накладної не змінюється, запис лишається."""
+    STATS["сценаріїв"] += 1
+    orig = await fresh()
+    k = route_idx(run_now())[0]
+    before = engine.due(run_now()["stops"][k])
+    for kind in engine.OTHER_KINDS:
+        r = await call("other", i=k, kind=kind)
+        if r[0] != "ok":
+            finding("логіка", "Інший товар", f"«{kind}» не записався: {r[1]}")
+    st = run_now()["stops"][k]
+    if abs(engine.due(st) - before) > 0.005:
+        finding("гроші", "Інший товар", f"сума до збору змінилась: було {before}, стало {engine.due(st)}")
+    got = [p for p in st["probs"] if p["item"] == engine.OTHER_ITEM]
+    if len(got) != len(engine.OTHER_KINDS) or any(p["cut"] or p["qty"] for p in got):
+        finding("логіка", "Інший товар", f"записів {len(got)} з {len(engine.OTHER_KINDS)} або в них є сума чи кількість")
+    v = view.run_view(run_now())["stops"][k]
+    if any("×" in p["text"] for p in v["probs"]):
+        finding("кнопки", "Інший товар", "на картці показано «×0» біля іншого товару")
+    walk_buttons(*hd.card(run_now(), k), "картка з іншим товаром")
+    check("інший товар", orig, [])
+    await call("all", i=k)
+    if (await call("other", i=k, kind="miss"))[0] == "ok":
+        finding("захист", "Інший товар", "записався в уже відміченій точці")
+
+
 async def scenario_managers():
     """Рішення власника 26.11: салон ведуть двоє (манікюр і волосся) — кнопка дзвінка на кожного менеджера."""
     STATS["сценаріїв"] += 1
@@ -257,6 +283,9 @@ async def scenario_guards():
         ("problem", {"i": k, "kind": "лол", "ii": 0, "li": 0, "qty": 1}, "невідома проблема"),
         ("problem", {"i": k, "kind": "refuse", "rows": []}, "порожній список повернення"),
         ("problem", {"i": k, "kind": "refuse", "rows": [{"ii": 0, "li": 0, "qty": 1}] * 2}, "позиція у списку двічі"),
+        ("other", {"i": k, "kind": "refuse"}, "«інший товар» у відмові клієнта"),
+        ("other", {"i": k, "kind": "лол"}, "«інший товар» з невідомою проблемою"),
+        ("other", {"i": 999, "kind": "miss"}, "«інший товар» у неіснуючій точці"),
         ("expense", {"sum": "abc"}, "витрата літерами"),
         ("expense_del", {"k": 5}, "видалити неіснуючу витрату"),
         ("start", {"id": "../../etc/passwd"}, "дивна путівка"),
@@ -282,7 +311,7 @@ async def scenario_chaos(seed, n_steps=250):
     rnd = random.Random(seed)
     orig = await fresh()
     steps = []
-    acts = ["open", "all", "today", "given", "pick", "amount", "none", "fix", "items", "problem", "expense",
+    acts = ["open", "all", "today", "given", "pick", "amount", "none", "fix", "items", "problem", "other", "expense",
             "expense_del", "close", "state", "menu"]
     for _ in range(n_steps):
         run = run_now()
@@ -301,6 +330,8 @@ async def scenario_chaos(seed, n_steps=250):
         elif act == "problem":
             a.update(kind=rnd.choice(list(engine.PROBLEMS)), ii=rnd.randint(0, 2), li=rnd.randint(0, 3),
                      qty=rnd.choice([1, 2, 3, 0.5, -1, 10]))
+        elif act == "other":
+            a["kind"] = rnd.choice(list(engine.PROBLEMS) + ["x"])
         elif act == "expense":
             a = {"sum": rnd.choice(["50", "0", "x", "120,5"]), "kind": rnd.choice(["Пальне", "Інше"])}
         elif act == "expense_del":
@@ -411,7 +442,8 @@ async def scenario_bot_buttons():
 async def main():
     t0 = time.time()
     for name, coro in [("сценарій", scenario_full()), ("товар списком", scenario_list()),
-                       ("менеджери", scenario_managers()), ("захист", scenario_guards()),
+                       ("інший товар", scenario_other()), ("менеджери", scenario_managers()),
+                       ("захист", scenario_guards()),
                        ("кнопки бота", scenario_bot_buttons())]:
         try:
             await coro

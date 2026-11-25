@@ -115,6 +115,19 @@ def add_problem(st, inv_ref, kind, item, qty, price):
     return 0.0
 
 
+OTHER_KINDS = ("miss", "wrong", "dmg")      # де буває «інший товар» (відмова — завжди з накладної)
+OTHER_ITEM = "інший товар, не з накладної"
+
+
+def add_other(st, kind):
+    """Рішення власника 26.11: «Інший товар» без пошуку — сума не змінюється, склад і менеджер розберуться по факту."""
+    st["probs"].append({"inv": "—", "kind": kind, "item": OTHER_ITEM, "qty": 0, "cut": 0.0})
+
+
+def qty_txt(p):
+    return f" ×{p['qty']:g}" if p.get("qty") else ""
+
+
 def route(run):
     return [s for s in run["stops"] if s["where"] == "route"]
 

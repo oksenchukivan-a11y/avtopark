@@ -313,6 +313,7 @@ function vItems(){              // рішення власника 26.11: пов
       h += `<div class="small muted" style="margin:14px 0 4px">№ ${esc(x.no)}</div><div class="calls">${mgrBtns(st, [x.mgr])}</div>`; }
     h += `<div class="row"><button class="chk${on ? " on" : ""}" style="margin:0;flex:1;min-width:0" data-a="item" data-n="${n}"><span class="box">${on ? "✓" : ""}</span><span class="t">${esc(x.name)}<div class="small muted">${on ? `${ps[n]} з ${x.qty} шт` : `${x.qty} шт`} · ${money(x.price)}</div></span></button>${x.qty > 1 ? `<button class="call edit" data-a="pqty" data-n="${n}">✏️</button>` : ""}</div>`; });
   if (!its.length) h += `<div class="card">Позицій немає.</div>`;
+  if (S.run.other_kinds.includes(S.kind)) h += `<button class="btn" data-a="pother" style="margin-top:14px">❓ Інший товар — розберуться на складі</button>`;
   const ks = Object.keys(ps), sum = ks.reduce((a, n) => a + ps[n] * its[n].price, 0);
   return [h, ks.length ? [["back", "← Назад", "problem"], ["go", `✔️ Готово · ${ks.length} поз<br>${money(sum)}`, "saveproblems"]] : [["back", "← Назад", "problem"]]];
 }
@@ -400,6 +401,7 @@ const A = {
   left: () => mark("none", {reason:"nomoney", left:false}),
   leftyes: () => mark("none", {reason:"nomoney", left:true}),
   problem: () => go("problem"),
+  pother: async () => { if (await api("other", {i:S.i, kind:S.kind})) { S.psel = {}; toast("Записано: інший товар"); go("card"); } },
   kind: async d => { S.kind = d.k; S.psel = {}; const j = await api("items", {i:S.i}); if (j) { S.items = j.items; go("items"); } },
   item: d => { const n = +d.n; if (S.psel[n] !== undefined) delete S.psel[n]; else S.psel[n] = S.items[n].qty; render(true); },
   pqty: d => { const n = +d.n; S.itemN = n; S.item = S.items[n]; S.qty = S.psel[n] !== undefined ? S.psel[n] : S.item.qty; go("qty"); },

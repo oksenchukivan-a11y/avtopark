@@ -323,3 +323,29 @@ def test_manager_names_as_written_in_1c():
         c.execute("INSERT INTO reys_phones(name, phone) VALUES('Стара  Назва ', '+380500000001')")
     store.init()
     assert store.phone("стара назва") == "+380500000001"
+
+
+def test_other_product_keeps_the_sum():
+    """Рішення власника 26.11: привезли не те, чого в накладній немає — один дотик, сума не змінюється."""
+    from test_flow import Tg
+
+    async def go():
+        async with App() as app:
+            run = (await app.call("start", id="demo"))[1]["run"]
+            assert run["other_kinds"] == ["miss", "wrong", "dmg"]
+            before = run["stops"][0]["due"]
+            assert not (await app.call("other", i=0, kind="refuse"))[1]["ok"]          # відмова — завжди з накладної
+            st = (await app.call("other", i=0, kind="wrong"))[1]["run"]["stops"][0]
+            assert st["due"] == before and st["probs"] == [{"text": "не той товар: інший товар, не з накладної", "cut": 0.0}]
+        tg = Tg()                                                                      # те саме кнопкою в чаті
+        await tg.text("/reys")
+        tg.screen = 1001
+        await tg.tap("r:demo")
+        await tg.tap("r:o:0")
+        await tg.tap("r:pr:0")
+        text, btns = tg.last_screen(await tg.tap("r:pk:0:miss"))
+        assert "r:po:0:miss" in btns and btns[-2] == "r:o:0" or btns[-1] == "r:o:0"
+        assert "r:po:0:refuse" not in tg.last_screen(await tg.tap("r:pk:0:refuse"))[1]
+        text, btns = tg.last_screen(await tg.tap("r:po:0:miss"))
+        assert "не вистачає: інший товар, не з накладної" in text and "×" not in text and "1 501 ₴ до збору" in text
+    asyncio.run(go())

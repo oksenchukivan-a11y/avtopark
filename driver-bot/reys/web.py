@@ -288,6 +288,21 @@ async def a_problem(uid, a):
     return {"n": len(picked)}
 
 
+async def a_other(uid, a):
+    """Рішення власника 26.11: «Інший товар» без пошуку — сума не змінюється."""
+    run_id, run = _run(uid)
+    st = _stop(run, a, free=True)
+    kind = a.get("kind")
+    if kind not in engine.OTHER_KINDS:
+        raise Bad("Тут інший товар не записується")
+    if not engine.riding(st):
+        raise Bad("У цій точці сьогодні немає накладних")
+    engine.add_other(st, kind)
+    store.log(run_id, uid, "problem", stop=st["name"], inv="—", kind=kind, item=engine.OTHER_ITEM, qty=0, cut=0)
+    store.save(run_id, run)
+    return {}
+
+
 async def a_expense(uid, a):
     run_id, run = _run(uid)
     kind = str(a.get("kind") or "Нова пошта")[:30]
@@ -344,7 +359,7 @@ async def after_close(uid, run, who):
 ACTIONS = {"state": a_state, "menu": a_menu, "start": a_start, "open": a_open,
            "all": _quick(engine.pay_all, "all"), "today": _quick(engine.pay_today, "tod"),
            "given": _quick(engine.mark_given, "gv"), "pick": a_pick, "amount": a_amount, "none": a_none,
-           "fix": a_fix, "items": a_items, "problem": a_problem, "expense": a_expense,
+           "fix": a_fix, "items": a_items, "problem": a_problem, "other": a_other, "expense": a_expense,
            "expense_del": a_expense_del, "close": a_close}
 
 

@@ -72,7 +72,7 @@ def stop_view(st, i, people):
         "pay": [{"k": k, "name": _debt_name(p) if p["old"] else f"№ {p['no']} · сьогодні", "sum": p["sum"],
                  "old": p["old"]} for k, p in enumerate(e.payable(st))],
         "over": round(-st["sheet_debt"], 2) if st["sheet_debt"] <= -e.MIN_DEBT else 0,
-        "probs": [{"text": f"{e.PROBLEMS[p['kind']]}: {p['item']} ×{p['qty']:g}", "cut": p["cut"]}
+        "probs": [{"text": f"{e.PROBLEMS[p['kind']]}: {p['item']}{e.qty_txt(p)}", "cut": p["cut"]}
                   for p in st["probs"]],
         "status": None if not s else {
             "kind": s["kind"], "text": s["text"], "cash": s["cash"], "reason": s.get("reason", ""),
@@ -90,4 +90,4 @@ def run_view(run):
     return {"title": title, "demo": bool(run.get("demo")), "closed": bool(run.get("closed")),
             "stops": stops, "order": order, "left_sum": left, "totals": t,
             "expenses": [{"kind": x["kind"], "sum": x["sum"]} for x in run["expenses"]],
-            "reasons": e.REASONS, "problems": e.PROBLEMS}
+            "reasons": e.REASONS, "problems": e.PROBLEMS, "other_kinds": list(e.OTHER_KINDS)}

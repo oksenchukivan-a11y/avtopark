@@ -97,7 +97,8 @@ def card_text(st, head=""):
             bo = " · без оплати" if "BO" in i["tags"] and not e.free(st) else ""
             lines.append(f"№ {h(i['no'])} · {e.money(i['sum'])}{bo}")
         for p in st["probs"]:
-            lines.append(f"⚠️ {e.PROBLEMS[p['kind']]}: {h(p['item'])} ×{p['qty']:g} (−{e.money(p['cut'])})")
+            lines.append(f"⚠️ {e.PROBLEMS[p['kind']]}: {h(p['item'])}{e.qty_txt(p)}"
+                         + (f" (−{e.money(p['cut'])})" if p["cut"] else ""))
         out.append(q(*lines))
     wait = []
     for i in st["inv"]:
@@ -240,6 +241,8 @@ def screen_items(st, i, kind, items, page=0, sel=None, per=8):
         price = {f"{ii}:{li}": p for ii, li, n, qty, p in items}
         total = sum(qv * price.get(k, 0) for k, qv in sel.items())
         last.append((f"✔️ Готово · {len(sel)} поз · {e.money(total)}", f"r:px:{i}:{kind}"))
+    if kind in e.OTHER_KINDS:                           # рішення власника 26.11: без пошуку, один дотик
+        rows.append([("❓ Інший товар — розберуться на складі", f"r:po:{i}:{kind}")])
     rows.append(last)                                   # головна дія внизу праворуч, «назад» ліворуч
     return text, rows
 
@@ -321,7 +324,7 @@ def report(run, driver=""):
         else:
             rest.append(f"<b>{h(s['name'])}</b> · {h(st['text'])}")
         for p in s["probs"]:
-            rest.append(f"⚠️ {h(s['name'])}, № {h(p['inv'])}: {e.PROBLEMS[p['kind']]} — {h(p['item'])} ×{p['qty']:g}")
+            rest.append(f"⚠️ {h(s['name'])}, № {h(p['inv'])}: {e.PROBLEMS[p['kind']]} — {h(p['item'])}{e.qty_txt(p)}")
     if paid:
         out.append("🟢 <b>Оплатили</b>\n" + q(*paid))
     if rest:
