@@ -171,6 +171,30 @@ def test_fix_and_cannot_close_early():
     asyncio.run(go())
 
 
+def test_snapshot_of_real_sheet_is_offered_and_opens():
+    async def go():
+        tg = Tg()
+        d = handlers.snap_dir()
+        os.makedirs(d)
+        snap = reys.build.demo_run(dt.date(2026, 11, 25))
+        snap.pop("demo")
+        snap["title"] = "Місто 25.11 · друк 13:01"
+        snap["stops"][0]["status"] = {"kind": "paid"}            # чужі відмітки у знімку не мають переноситись
+        with open(os.path.join(d, "2026-11-25_1301_8389.json"), "w", encoding="utf-8") as f:
+            json.dump(snap, f, ensure_ascii=False)
+        open(os.path.join(d, "../evil.json"), "w").write("{}")
+        sent, _ = await tg.text("/reys")
+        text, btns = tg.last_screen(sent)
+        assert "Справжні путівки з 1С" in text and "r:sn:2026-11-25_1301_8389" in btns
+        tg.screen = 1001
+        text, btns = tg.last_screen(await tg.tap("r:sn:2026-11-25_1301_8389"))
+        assert "Місто 25.11 · друк 13:01 · лишилось 5 з 5" in text
+        text, btns = tg.last_screen(await tg.tap("r:o:1"))
+        assert "БОРГ 3 600 ₴" in text                              # борги по накладних узято зі знімка
+        assert await tg.tap("r:sn:../evil") is not None and store.open_run(ME)[1]["title"].startswith("Місто")
+    asyncio.run(go())
+
+
 # ---------- підставна 1С ----------
 
 Z = onec.ZERO

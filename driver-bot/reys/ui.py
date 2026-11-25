@@ -24,7 +24,7 @@ def screen_list(run, show_done=False):
     done = [(i, s) for i, s in enumerate(stops) if s["status"]]
     t = e.totals(run)
     left = sum(e.due(s) for _, s in opened)
-    title = "Демо-рейс" if run.get("demo") else f"Рейс {dm(run['day'])}"
+    title = "Демо-рейс" if run.get("demo") else h(run.get("title") or f"Рейс {dm(run['day'])}")
     text = (f"🚚 <b>{title} · лишилось {len(opened)} з {t['stops']}</b>\n"
             f"До збору лишилось: {e.money(left)}\nЗібрано: {e.money(t['cash'])}")
     rows = [[_btn(s, i)] for i, s in opened]

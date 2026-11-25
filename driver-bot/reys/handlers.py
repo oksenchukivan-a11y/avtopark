@@ -1,6 +1,8 @@
 """Склейка з Telegram (aiogram 3). Один екран на рейс: повідомлення переписується, стрічка не росте."""
+import json
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -73,6 +75,46 @@ async def reshow(bot: Bot, chat_id, run, text, rows):
     run["screen"] = m.message_id
 
 
+# ---------- знімки путівок ----------
+# Поки сервер бота не має шляху до 1С, готову путівку можна покласти файлом у теку знімків.
+
+SNAP_RX = re.compile(r"^[0-9A-Za-z_-]{1,40}$")
+
+
+def snap_dir() -> str:
+    return os.environ.get("REYS_SNAP_DIR") or os.path.join(os.path.dirname(os.path.abspath(store.DB_PATH)),
+                                                           "reys_snapshots")
+
+
+def snapshots():
+    """[(назва файлу без .json, підпис кнопки)] — найновіші зверху."""
+    d, out = snap_dir(), []
+    if os.path.isdir(d):
+        for f in sorted(os.listdir(d), reverse=True):
+            stem = f[:-5]
+            if f.endswith(".json") and SNAP_RX.match(stem):
+                try:
+                    with open(os.path.join(d, f), encoding="utf-8") as fh:
+                        out.append((stem, json.load(fh).get("title") or stem))
+                except (OSError, ValueError):
+                    log.warning("reys: знімок %s не читається", f)
+    return out[:12]
+
+
+def load_snapshot(stem: str):
+    if not SNAP_RX.match(stem):
+        raise onec.OneCError("неправильна назва знімка")
+    try:
+        with open(os.path.join(snap_dir(), stem + ".json"), encoding="utf-8") as fh:
+            run = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise onec.OneCError(f"знімок не читається: {e}") from e
+    for st in run["stops"]:
+        st["status"], st.setdefault("probs", [])[:] = None, []
+    run.update(expenses=[], closed=False, snap=True)
+    return run
+
+
 # ---------- завантаження з 1С ----------
 
 async def list_sheets(day: date):
@@ -108,7 +150,7 @@ async def load_run(ref: str):
 
 async def load_debts(st):
     """Неоплачені накладні клієнта з 1С. Сьогоднішні з путівки сюди не входять — вони показані окремо."""
-    if st["debts"] is not None or st["key"].startswith("demo"):
+    if st["debts"] is not None or st["key"].startswith("demo") or not onec.configured():
         return
     try:
         bal = await onec.call("register_totals", register=REG, table="Balance",
@@ -132,6 +174,8 @@ async def load_items(st):
     if st["key"].startswith("demo"):
         demo = [("Фарба для волосся 6.0", 2, 185.0), ("Окисник 6 % 1 л", 1, 240.0), ("Шампунь 1 л", 3, 320.0)]
         items = [(0, n, name, q, p) for n, (name, q, p) in enumerate(demo)]
+    elif not onec.configured():
+        raise onec.OneCError("позиції накладної зʼявляться, коли бот матиме звʼязок з 1С")
     else:
         for ii, inv in enumerate(st["inv"]):
             if {"SV", "NP", "DATE"} & set(inv["tags"]):
@@ -171,9 +215,13 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
             text += "Дата не розпізнана. Приклад: /reys 24.11"
         except onec.OneCError as e:
             text += f"1С не відповідає: {e}"
-    else:
+    snaps = snapshots()
+    if snaps:
+        text += ("\n" if onec.configured() else "") + "Справжні путівки з 1С:"
+        rows += [[(f"📄 {title}"[:60], f"r:sn:{stem}")] for stem, title in snaps]
+    elif not onec.configured():
         text += "1С ще не підключено — можна пройти демо-рейс із вигаданими клієнтами."
-    rows.append([("🎓 Демо-рейс", "r:demo")])
+    rows.append([("🎓 Демо-рейс (вигадані клієнти)", "r:demo")])
     await m.answer(text, reply_markup=markup(rows), parse_mode="HTML")
 
 
@@ -207,6 +255,16 @@ async def start_run(cb: CallbackQuery, run):
 async def cb_demo(cb: CallbackQuery):
     await cb.answer()
     await start_run(cb, build.demo_run(today()))
+
+
+@router.callback_query(F.data.startswith("r:sn:"))
+async def cb_snapshot(cb: CallbackQuery):
+    try:
+        run = load_snapshot(cb.data.split(":", 2)[2])
+    except onec.OneCError as e:
+        return await cb.answer(str(e)[:190], show_alert=True)
+    await cb.answer()
+    await start_run(cb, run)
 
 
 @router.callback_query(F.data.startswith("r:ld1:"))
