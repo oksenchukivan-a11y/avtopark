@@ -52,7 +52,8 @@ class Tg:
         self.bot = Bot("42:TEST", session=self.session)
         self.dp = Dispatcher(storage=MemoryStorage())
         handlers.router._parent_router = None       # той самий роутер у кожному тесті підключаємо заново
-        reys.setup(self.dp, admin_id=ME)
+        # кожен тест — на чистій базі, щоб порядок запуску не впливав на результат
+        reys.setup(self.dp, admin_id=ME, db_path=os.path.join(tempfile.mkdtemp(), "t.db"))
         self.uid, self.screen = 0, None
 
     def user(self, who):
