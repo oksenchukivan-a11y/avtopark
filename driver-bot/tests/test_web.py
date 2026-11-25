@@ -206,7 +206,8 @@ def test_manager_phone_from_shared_contact():
             sent = await tg.tap(f"r:ph:{names.index('Оля')}")
             assert store.phone("Оля") == "+380501112233" and any(isinstance(m, DeleteMessage) for m in sent)
             stops = (await app.call("state"))[1]["run"]["stops"]
-            assert [s["mphone"] for s in stops if s["manager"] == "Оля"][0] == "+380501112233"
+            olya = [m for s in stops for m in s["mgrs"] if m["name"] == "Оля"]
+            assert olya and all(m["phone"] == "+380501112233" for m in olya)
             os.environ["REYS_TESTERS"] = "333"                       # тестувальник-водій номери не вносить
             handlers.TESTERS.add(333)
             sent, _ = await share(333)
@@ -249,3 +250,51 @@ def test_nightly_robot_finds_nothing():
     out = subprocess.run([sys.executable, os.path.join(here, "reys_robot.py")], capture_output=True, text=True,
                          env=env, timeout=300)
     assert out.returncode == 0 and "Знахідок: 0" in out.stdout, out.stdout[-2000:] + out.stderr[-2000:]
+
+
+def test_two_managers_on_one_stop():
+    """Салон ведуть двоє: кнопка дзвінка на кожного, з напрямком; у накладній видно, чия вона."""
+    from aiogram.methods import SendContact
+
+    async def go():
+        async with App() as app:
+            tg = app.tg
+            store.set_phone("Іра", "+380500000001")
+            store.set_phone("Оля", "+380500000002")
+            store.set_direction("Іра", "волосся")
+            store.set_direction("Оля", "манікюр")
+            st = (await app.call("start", id="demo"))[1]["run"]["stops"][3]          # Барбершоп: дві накладні
+            assert [(m["name"], m["label"], m["phone"]) for m in st["mgrs"]] == \
+                [("Іра", "Іра · волосся", "+380500000001"), ("Оля", "Оля · манікюр", "+380500000002")]
+            assert [(x["no"], x["mgr"], x["who"]) for x in st["ride"]] == [("1211", "Іра", "Іра"), ("1212", "Оля", "Оля")]
+            items = (await app.call("items", i=3))[1]["items"]
+            assert {(x["no"], x["mgr"]) for x in items} == {("1211", "Іра")}
+            one = (await app.call("state"))[1]["run"]["stops"][0]                    # один менеджер — без підпису в накладній
+            assert len(one["mgrs"]) == 1 and one["ride"][0]["who"] == "" and one["mgrs"][0]["phone"] == ""
+            debtor = (await app.call("state"))[1]["run"]["stops"][4]                 # боржник: дзвонити менеджеру боргу
+            assert debtor["debt_mgrs"] == ["Оля"] and debtor["debts"][0]["mgr"] == "Оля"
+            # чат: кнопка на кожного менеджера з телефоном, код кнопки з номером менеджера
+            await tg.text("/reys")
+            os.environ.pop("REYS_WEB_URL")
+    asyncio.run(go())
+
+
+def test_call_buttons_in_chat():
+    from aiogram.methods import SendContact
+    from reys import build, ui
+    from test_flow import Tg
+
+    async def go():
+        tg = Tg()
+        store.set_phone("Оля", "+380500000002")
+        store.set_direction("Оля", "манікюр")
+        await tg.text("/reys")
+        tg.screen = 1001
+        await tg.tap("r:demo")
+        text, btns = tg.last_screen(await tg.tap("r:o:3"))                           # Іра без телефону, Оля з телефоном
+        assert "👤 Іра" in text and "👤 Оля · манікюр" in text and "r:cl:3:1" in btns and "r:cl:3:0" not in btns
+        sent = await tg.tap("r:cl:3:1")
+        assert [m.phone_number for m in sent if isinstance(m, SendContact)] == ["+380500000002"]
+        text, btns = tg.last_screen(await tg.tap("r:o:0"))                           # телефону немає — одна кнопка-пояснення
+        assert "r:cl:0" in btns and not [m for m in await tg.tap("r:cl:0") if isinstance(m, SendContact)]
+    asyncio.run(go())

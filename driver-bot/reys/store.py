@@ -23,6 +23,7 @@ def init():
             id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, ts TEXT, tg_id INTEGER,
             action TEXT, payload TEXT);
         CREATE TABLE IF NOT EXISTS reys_phones(name TEXT PRIMARY KEY, phone TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS reys_dirs(name TEXT PRIMARY KEY, dir TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reys_screen(tg_id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER);
         """)
 
@@ -90,3 +91,30 @@ def set_screen(tg_id, chat_id, msg_id):
         else:
             c.execute("INSERT INTO reys_screen(tg_id, chat_id, msg_id) VALUES(?,?,?) ON CONFLICT(tg_id) "
                       "DO UPDATE SET chat_id=excluded.chat_id, msg_id=excluded.msg_id", (tg_id, chat_id, msg_id))
+
+
+def direction(name):
+    """Напрямок менеджера («манікюр», «волосся») — налаштування в базі, не в коді."""
+    with db() as c:
+        r = c.execute("SELECT dir FROM reys_dirs WHERE name=?", (name,)).fetchone()
+    return r["dir"] if r else ""
+
+
+def set_direction(name, value):
+    with db() as c:
+        if value:
+            c.execute("INSERT INTO reys_dirs(name, dir) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET dir=excluded.dir",
+                      (name, value))
+        else:
+            c.execute("DELETE FROM reys_dirs WHERE name=?", (name,))
+
+
+def people():
+    """{ім'я: (телефон, напрямок)} одним запитом — щоб екран рейсу не ходив у базу за кожною точкою."""
+    out = {}
+    with db() as c:
+        for r in c.execute("SELECT name, phone FROM reys_phones"):
+            out[r["name"]] = (r["phone"], "")
+        for r in c.execute("SELECT name, dir FROM reys_dirs"):
+            out[r["name"]] = (out.get(r["name"], ("", ""))[0], r["dir"])
+    return out

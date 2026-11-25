@@ -228,7 +228,7 @@ async def a_none(uid, a):
             raise Bad("У клієнта борг: спершу набери менеджера")
         engine.mark_none(st, uid, reason, left=left)
         st["status"]["text"] = "нема грошей · " + ("менеджер дозволив залишити" if left else "товар не залишив")
-        store.log(run_id, uid, "debtor", stop=st["name"], manager=st["manager"], left=left)
+        store.log(run_id, uid, "debtor", stop=st["name"], manager=", ".join(engine.debt_managers(st)), left=left)
     else:
         engine.mark_none(st, uid, reason, left=reason != "closed")
         store.log(run_id, uid, "none", stop=st["name"], reason=reason)
@@ -248,9 +248,12 @@ async def a_fix(uid, a):
 async def a_items(uid, a):
     run_id, run = _run(uid)
     st = _stop(run, a)
+    if not engine.riding(st):
+        raise Bad("У цій точці сьогодні немає накладних")
     items = await hd.load_items(st)
     store.save(run_id, run)
-    return {"items": [{"ii": x[0], "li": x[1], "name": x[2], "qty": x[3], "price": x[4]} for x in items]}
+    return {"items": [{"ii": x[0], "li": x[1], "name": x[2], "qty": x[3], "price": x[4],
+                       "no": st["inv"][x[0]]["no"], "mgr": st["inv"][x[0]].get("manager", "")} for x in items]}
 
 
 def _one_problem(st, kind, row):
@@ -272,6 +275,8 @@ async def a_problem(uid, a):
     rows = a.get("rows") if isinstance(a.get("rows"), list) else [a]
     if kind not in engine.PROBLEMS or not rows or len(rows) > 200:
         raise Bad("Нічого не позначено")
+    if not engine.riding(st):
+        raise Bad("У цій точці сьогодні немає накладних")
     picked = [_one_problem(st, kind, r) for r in rows]
     if len({(it[0], it[1]) for it, _ in picked}) != len(picked):
         raise Bad("Позиція позначена двічі")

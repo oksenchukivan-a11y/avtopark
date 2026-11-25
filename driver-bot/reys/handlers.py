@@ -159,8 +159,44 @@ async def load_run(ref: str):
         field="Контрагент_Key",
         extra=f"Date ge datetime'{since}T00:00:00' and Date le datetime'{sheet['Date'][:19]}' and Posted eq true")
     run = build.build_run(sheet, invoices, names, agents, orders)
+    AGENTS.update(agents)
     await load_phones(run)
+    await load_recent_managers(run, day)
     return run
+
+
+AGENTS: dict = {}            # ключ менеджера в 1С → ім'я; наповнюється під час роботи
+
+
+async def agent_names(keys):
+    need = {k for k in keys if k and k != onec.ZERO and k not in AGENTS}
+    if need:
+        AGENTS.update({r["Ref_Key"]: r["Description"] for r in await onec.by_keys(
+            "Catalog_ФизическиеЛица", need, "Ref_Key,Description")})
+    return AGENTS
+
+
+async def load_recent_managers(run, day, days=90):
+    """Хто продавав клієнтові за останні місяці. Поле «основний менеджер» у картці клієнта в 1С порожнє,
+    тому менеджерів точки беремо з факту: з накладних. Так видно й другого менеджера салону."""
+    keys = sorted({st["key"] for st in run["stops"] if st["where"] in ("route", "debt")})
+    since = (day - timedelta(days=days)).date().isoformat()
+    seen = {}
+    try:
+        for part in onec.chunks(keys, 15):
+            flt = (f"({onec.guid_filter('Контрагент_Key', part)}) and Posted eq true and "
+                   f"Date ge datetime'{since}T00:00:00'")
+            for r in await onec.call("query", object=REAL, filter=flt, select="Контрагент_Key,Агент_Key,Date",
+                                     orderby="Date desc", top=3000):
+                lst = seen.setdefault(r["Контрагент_Key"], [])
+                if r.get("Агент_Key") and r["Агент_Key"] != onec.ZERO and r["Агент_Key"] not in lst:
+                    lst.append(r["Агент_Key"])
+        names = await agent_names({k for lst in seen.values() for k in lst})
+    except (onec.OneCError, KeyError) as e:      # без цього рейс теж працює: лишаються менеджери накладних
+        log.warning("reys: недавні менеджери не завантажились: %s", e)
+        return
+    for st in run["stops"]:
+        st["recent_mgrs"] = [names[k] for k in seen.get(st["key"], []) if names.get(k)][:4]
 
 
 def norm_phones(text: str):
@@ -206,9 +242,11 @@ async def load_debts(st):
         owed = {b["ДокументРасчетовСКонтрагентом"]: b["СуммаВзаиморасчетовBalance"] for b in bal
                 if b.get("СуммаВзаиморасчетовBalance", 0) > 0.005 and b["ДокументРасчетовСКонтрагентом"] not in mine
                 and "РеализацияТоваровУслуг" in b.get("ДокументРасчетовСКонтрагентом_Type", "")}
-        docs = await onec.by_keys(REAL, owed, "Ref_Key,Number,Date") if owed else []
+        docs = await onec.by_keys(REAL, owed, "Ref_Key,Number,Date,Агент_Key") if owed else []
+        names = await agent_names({d.get("Агент_Key") for d in docs})
         st["debts"] = [{"ref": d["Ref_Key"], "no": build.short_no(d["Number"]), "date": d["Date"][:10],
-                        "sum": round(owed[d["Ref_Key"]], 2)} for d in docs]
+                        "sum": round(owed[d["Ref_Key"]], 2), "manager": names.get(d.get("Агент_Key"), "")}
+                       for d in docs]
     except onec.OneCError as e:          # без зв'язку працюємо з боргом із путівки одним рядком
         log.warning("reys: борги по накладних не завантажились: %s", e)
 
@@ -313,7 +351,8 @@ def manager_names():
     with store.db() as c:
         for r in c.execute("SELECT data FROM reys_runs ORDER BY id DESC LIMIT 15"):
             try:
-                names |= {s.get("manager", "") for s in json.loads(r["data"])["stops"]}
+                for st in json.loads(r["data"])["stops"]:
+                    names |= set(engine.managers(st))
             except (ValueError, KeyError):
                 pass
     names.discard("")
@@ -355,6 +394,18 @@ async def cb_phone(cb: CallbackQuery, state: FSMContext):
         await cb.message.delete()                                   # у чаті нічого не лишається
     except TelegramBadRequest:
         pass
+
+
+@router.message(Command("reys_dir"), lambda m: m.from_user.id == ADMIN)
+async def cmd_dir(m: Message, command: CommandObject):
+    """/reys_dir Прізвище Ім'я = манікюр — напрямок менеджера для підпису кнопки дзвінка. Порожньо після «=» — прибрати."""
+    name, sep, value = (command.args or "").partition("=")
+    name, value = name.strip(), value.strip()[:20]
+    if not name or not sep:
+        rows = [f"{n} — {d or 'напрямок не задано'}" for n, (ph, d) in sorted(store.people().items())]
+        return await m.answer("Приклад: /reys_dir Петренко Олена = волосся\n\n" + "\n".join(rows))
+    store.set_direction(name, value)
+    await m.answer(f"Записав: {name} — {value or 'без напрямку'}")
 
 
 async def ctx(cb: CallbackQuery):
@@ -626,15 +677,20 @@ async def cb_block(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("r:cl:"))
 async def cb_call(cb: CallbackQuery, bot: Bot):
+    """r:cl:{точка} — перший менеджер точки; r:cl:{точка}:{k} — k-й зі списку менеджерів."""
     run_id, run, i, st = await stop_ctx(cb)
     if not run:
         return
-    ph = store.phone(st["manager"]) if st["manager"] else None
+    p, names = parts(cb), engine.managers(st)
+    k = int(p[3]) if len(p) > 3 and p[3].isdigit() else 0
+    who = names[k] if k < len(names) else ""
+    ph = store.phone(who) if who else None
     if not ph:
-        who = st["manager"] or "менеджера не вказано"
-        return await cb.answer(f"Телефону ще немає: {who}.\nДодати: /reys_tel {who} 050…", show_alert=True)
+        who = who or "менеджера не вказано"
+        return await cb.answer(f"Телефону ще немає: {who}.\nВласник додає його, переславши боту контакт.",
+                               show_alert=True)
     await cb.answer()
-    name = st["manager"].split()
+    name = who.split()
     await bot.send_contact(cb.message.chat.id, phone_number=ph, first_name=name[-1] if name else "Менеджер",
                            last_name=name[0] if len(name) > 1 else None)
 

@@ -6,7 +6,9 @@
 from html import escape as h
 
 from . import engine as e
+from . import store
 from .tags import LABELS, driver_comment
+from .view import mgr_view
 
 SKIP_WHY = {"SV": "самовивіз", "NP": "Нова пошта", "DATE": "доставка в інший день"}
 
@@ -75,8 +77,9 @@ def card_text(st, head=""):
     else:
         out.append(f"💰 <b>{e.money(d)}</b> до збору")
     who = [f"📍 <b>{h(st['name'].upper())}</b>", h(st["addr"])]
-    if st["manager"]:
-        who.append(f"👤 {h(st['manager'])}")
+    people = store.people()
+    for n in e.managers(st):
+        who.append(f"👤 {h(mgr_view(n, people)['label'] if people.get(n, ('', ''))[1] else n)}")
     seen = set()
     for i in st["inv"]:
         c = driver_comment(i["comment"])
@@ -140,8 +143,17 @@ def screen_card(st, i, head=""):
             rows.append([("✅ Віддав товар", f"r:gv:{i}")])
         if e.riding(st):
             rows.append([("⚠️ Проблема з товаром", f"r:pr:{i}")])
-    rows.append([("📞 Менеджер", f"r:cl:{i}"), ("← До списку", "r:l")])
+    rows += call_rows(st, i)
+    rows.append([("← До списку", "r:l")])
     return text, rows
+
+
+def call_rows(st, i, names=None):
+    """Кнопка дзвінка на кожного менеджера, у кого є телефон. Немає жодного — одна кнопка, яка це пояснить."""
+    people, every = store.people(), e.managers(st)
+    out = [[(f"📞 {mgr_view(n, people)['label']}"[:40], f"r:cl:{i}:{every.index(n)}")]
+           for n in (names or every) if n in every and people.get(n, ("", ""))[0]]
+    return out or [[("📞 Менеджер", f"r:cl:{i}")]]
 
 
 def screen_part(st, i):
@@ -188,9 +200,9 @@ def screen_reasons(st, i):
 def screen_block(st, i):
     return (f"📍 <b>{h(st['name'].upper())}</b>\n⛔ <b>Борг {e.money(e.debt_due(st))}</b>\n"
             + q("Не залишай товар, поки не набереш менеджера.",
-                f"👤 {h(st['manager'])}" if st["manager"] else ""),
-            [[("📞 Набрати менеджера", f"r:cl:{i}")], [("Менеджер дозволив залишити", f"r:al:{i}")],
-             [("Товар не залишив", f"r:dn:{i}")], [("← Назад", f"r:o:{i}")]])
+                *[f"👤 {h(n)}" for n in e.debt_managers(st)]),
+            call_rows(st, i, e.debt_managers(st)) + [[("Менеджер дозволив залишити", f"r:al:{i}")],
+                                                      [("Товар не залишив", f"r:dn:{i}")], [("← Назад", f"r:o:{i}")]])
 
 
 def screen_problem(st, i):

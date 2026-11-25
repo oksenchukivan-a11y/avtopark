@@ -204,6 +204,38 @@ async def scenario_list():
     finding("збій", "Товар списком", "у демо-рейсі немає точки з двома позиціями — сценарій не перевірено")
 
 
+async def scenario_managers():
+    """Рішення власника 26.11: салон ведуть двоє (манікюр і волосся) — кнопка дзвінка на кожного менеджера."""
+    STATS["сценаріїв"] += 1
+    await fresh()
+    run = run_now()
+    known = set()
+    for s in run["stops"]:
+        names = engine.managers(s)
+        known |= set(names)
+        if s["inv"] and not names:
+            finding("логіка", "менеджери", f"{s['name']}: є накладні, а менеджера немає — дзвонити нікому")
+        for inv in s["inv"]:
+            if not inv.get("manager"):
+                finding("логіка", "менеджери", f"{s['name']}: у накладної {inv['no']} не вказано менеджера")
+    for n, name in enumerate(sorted(known)):
+        store.set_phone(name, f"+38050000{n:04d}")
+    v = view.run_view(run_now())
+    for k, s in enumerate(run["stops"]):
+        names = engine.managers(s)
+        got = [m["name"] for m in v["stops"][k]["mgrs"] if m["phone"]]
+        if got != names:
+            finding("кнопки", "дзвінок у застосунку", f"{s['name']}: менеджери {names}, а кнопок дзвінка {got}")
+        text, rows = hd.card(run, k)
+        calls = [b for row in rows for b in row if str(b[1]).startswith("r:cl:")]
+        if len(calls) != max(1, len(names)):
+            finding("кнопки", "дзвінок у чаті", f"{s['name']}: менеджерів {len(names)}, кнопок дзвінка {len(calls)}")
+        walk_buttons(text, rows, f"картка з телефонами · {s['name']}")
+        walk_buttons(*ui.screen_block(s, k), f"боржник з телефонами · {s['name']}")
+    with store.db() as c:
+        c.execute("DELETE FROM reys_phones")
+
+
 # ---------------- 3. захист від помилок людини ----------------
 async def scenario_guards():
     STATS["сценаріїв"] += 1
@@ -379,7 +411,8 @@ async def scenario_bot_buttons():
 async def main():
     t0 = time.time()
     for name, coro in [("сценарій", scenario_full()), ("товар списком", scenario_list()),
-                       ("захист", scenario_guards()), ("кнопки бота", scenario_bot_buttons())]:
+                       ("менеджери", scenario_managers()), ("захист", scenario_guards()),
+                       ("кнопки бота", scenario_bot_buttons())]:
         try:
             await coro
         except Exception:

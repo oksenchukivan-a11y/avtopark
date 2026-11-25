@@ -70,6 +70,9 @@ button{cursor:pointer}
 .btn.warn{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
 .btn.left{justify-content:space-between;text-align:left}
 .btn[disabled]{opacity:.45}
+.btn.nophone{opacity:.55;border-style:dashed}
+.calls{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px}
+.calls .btn{margin:0;font-size:16px;min-height:52px}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .pair .btn{margin:0}
 .dock{position:fixed;left:0;right:0;bottom:0;display:flex;gap:10px;padding:10px 16px calc(12px + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--line)}
@@ -144,16 +147,21 @@ const stop = () => S.run && S.run.stops[S.i];
 function telAttrs(num){
   return S.cfg.call === "browser" ? `data-a="dial" data-n="${esc(num)}"` : `href="tel:${esc(num)}"`;
 }
+function mgrBtns(st, names){       // кнопка на кожного менеджера; без телефону — пояснює, а не мовчить
+  const list = st.mgrs.filter(m => !names || names.includes(m.name));
+  return list.map(m => m.phone ? `<a class="btn blue" ${telAttrs(m.phone)}>📞 ${esc(m.label)}</a>`
+    : `<button class="btn nophone" data-a="nophone" data-n="${esc(m.name)}">📞 ${esc(m.label)}</button>`).join("");
+}
 function callBtn(st, cls){
-  const nums = st.phones.length + (st.mphone ? 1 : 0);
+  const mg = st.mgrs.filter(m => m.phone), nums = st.phones.length + mg.length;
   if (!nums) return `<span class="${cls} off">📞</span>`;
-  if (nums === 1) return `<a class="${cls}" ${telAttrs(st.phones[0] || st.mphone)}>📞</a>`;
+  if (nums === 1) return `<a class="${cls}" ${telAttrs(st.phones[0] || mg[0].phone)}>📞</a>`;
   return `<a class="${cls}" data-a="who" data-i="${st.i}">📞</a>`;
 }
 function whoSheet(st){
   let h = `<div class="sheet" data-a="unsheet"><div><b>${esc(st.name)}</b>`;
   st.phones.forEach((p, k) => h += `<a class="btn go" ${telAttrs(p)}>📞 Салон${st.phones.length > 1 ? " " + (k + 1) : ""}</a>`);
-  if (st.mphone) h += `<a class="btn blue" ${telAttrs(st.mphone)}>📞 Менеджер ${esc(st.manager)}</a>`;
+  h += mgrBtns(st);
   return h + `<button class="btn" data-a="unsheet">Закрити</button></div></div>`;
 }
 
@@ -213,17 +221,16 @@ function vCard(){
   let h = pos >= 0 ? `<div class="small muted">Точка ${pos + 1} з ${r.order.length}</div><div class="bar"><u style="width:${100 * (pos + 1) / r.order.length}%"></u></div>` : `<div class="small muted">Борг без доставки</div>`;
   h += st.free && st.due <= 0 ? `<div class="big">⚪ Без оплати</div><div class="muted">так написав менеджер</div>` : `<div class="big">${money(st.due)}</div><div class="muted">💰 до збору</div>`;
   h += `<div class="card"><b class="h">📍 ${esc(st.name.toUpperCase())}</b>${st.addr ? `<div>${esc(st.addr)}</div>` : ""}
-    ${st.manager ? `<div class="muted">👤 ${esc(st.manager)}</div>` : ""}
     ${st.comments.map(c => `<div>💬 «${esc(c)}»</div>`).join("")}
     ${st.flags.length ? `<div class="red"><b>❗ ${esc(st.flags.join(", "))}</b></div>` : ""}
-    <div class="pair" style="margin-top:10px">${st.phones.length ? `<a class="btn go" ${telAttrs(st.phones[0])}>📞 Салон</a>` : `<span class="btn" style="opacity:.4">📞 Салон</span>`}
-    ${st.mphone ? `<a class="btn blue" ${telAttrs(st.mphone)}>📞 Менеджер</a>` : `<span class="btn" style="opacity:.4">📞 Менеджер</span>`}</div></div>`;
+    <div class="calls">${st.phones.length ? `<a class="btn go" ${telAttrs(st.phones[0])}>📞 Салон</a>` : `<span class="btn" style="opacity:.4">📞 Салон</span>`}
+    ${mgrBtns(st) || `<button class="btn nophone" data-a="nophone" data-n="">📞 Менеджер</button>`}</div></div>`;
   if (st.ride.length) h += `<div class="card"><b class="h">📦 Сьогодні${st.free ? " · без оплати" : ""}</b>
-    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.bo && !st.free ? " · без оплати" : ""}</span><span>${money(x.sum)}</span></div>`).join("")}
+    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.who ? ` · <span class="muted">${esc(x.who)}</span>` : ""}${x.bo && !st.free ? " · без оплати" : ""}</span><span>${money(x.sum)}</span></div>`).join("")}
     ${st.probs.map(p => `<div class="line"><span>⚠️ ${esc(p.text)}</span><span>−${money(p.cut)}</span></div>`).join("")}</div>`;
   if (st.wait.length) h += `<div class="card wait"><b class="h">⏸ Не їде сьогодні</b>${st.wait.map(w => `<div class="line"><span>№ ${esc(w.no)} · ${esc(w.why)} ${esc(w.when)}</span><span>${money(w.sum)}</span></div>`).join("")}</div>`;
   if (st.debts.length) h += `<div class="card debt"><div class="line"><b>🔴 Борг</b><span>${money(st.debt)}</span></div>
-    ${st.debts.map(d => `<div class="line"><span>${esc(d.name)}</span><span>${money(d.sum)}</span></div>`).join("")}</div>`;
+    ${st.debts.map(d => `<div class="line"><span>${esc(d.name)}${d.who ? ` · <span class="muted">${esc(d.who)}</span>` : ""}</span><span>${money(d.sum)}</span></div>`).join("")}</div>`;
   else if (st.over > 0) h += `<div class="card ok">🟢 У клієнта переплата ${money(st.over)}</div>`;
   else h += `<div class="card ok">🟢 Боргу немає</div>`;
   const dock = [["back", "← Назад", "list"]];
@@ -283,8 +290,8 @@ function vReasons(){
 function vBlock(){
   const st = stop();
   return [`<b>📍 ${esc(st.name.toUpperCase())}</b><div class="big red">⛔ ${money(st.debt)}</div><div class="muted">🔴 борг</div>
-    <div class="card debt"><b>Не залишай товар, поки не набереш менеджера.</b>${st.manager ? `<div>👤 ${esc(st.manager)}</div>` : ""}</div>
-    ${st.mphone ? `<a class="btn blue" ${telAttrs(st.mphone)}>📞 Набрати менеджера</a>` : `<div class="card">Телефону менеджера ще немає.</div>`}
+    <div class="card debt"><b>Не залишай товар, поки не набереш менеджера.</b></div>
+    ${mgrBtns(st, st.debt_mgrs) || `<div class="card">Менеджера цієї точки в 1С не знайдено.</div>`}
     <div class="muted" style="margin-top:14px">Що сказав менеджер?</div>
     <button class="btn" data-a="leftyes">🤝 Дозволив залишити товар</button>
     <button class="btn red" data-a="left">Товар не залишив</button>`,
@@ -299,7 +306,11 @@ function vItems(){              // рішення власника 26.11: пов
   const st = stop(), its = S.items || [], ps = S.psel;
   let h = `<b>📍 ${esc(st.name.toUpperCase())}</b><div class="count" style="margin:8px 0">⚠️ ${esc(S.run.problems[S.kind])}</div><div class="muted">Познач усі позиції, потім «Готово». Не всі штуки — олівець.</div>`;
   if (its.length > 1) h += `<button class="btn" data-a="pall">${its.every((x, n) => ps[n] !== undefined) ? "☐ Зняти всі" : "☑️ Позначити всі"}</button>`;
+  const invs = [...new Set(its.map(x => x.ii))];
+  let last = null;
   its.forEach((x, n) => { const on = ps[n] !== undefined;      // один дотик — уся кількість; олівець — не всі штуки
+    if (x.ii !== last && (invs.length > 1 || x.mgr)) { last = x.ii;      // чия накладна — тому й дзвонити
+      h += `<div class="small muted" style="margin:14px 0 4px">№ ${esc(x.no)}</div><div class="calls">${mgrBtns(st, [x.mgr])}</div>`; }
     h += `<div class="row"><button class="chk${on ? " on" : ""}" style="margin:0;flex:1;min-width:0" data-a="item" data-n="${n}"><span class="box">${on ? "✓" : ""}</span><span class="t">${esc(x.name)}<div class="small muted">${on ? `${ps[n]} з ${x.qty} шт` : `${x.qty} шт`} · ${money(x.price)}</div></span></button>${x.qty > 1 ? `<button class="call edit" data-a="pqty" data-n="${n}">✏️</button>` : ""}</div>`; });
   if (!its.length) h += `<div class="card">Позицій немає.</div>`;
   const ks = Object.keys(ps), sum = ks.reduce((a, n) => a + ps[n] * its[n].price, 0);
@@ -375,6 +386,7 @@ const A = {
   open: async d => { S.i = +d.i; S.sel = []; S.sum = ""; const st = stop(); if (st.where !== "skip") { await api("open", {i:S.i}); go("card"); } },
   who: d => { $("sheet").innerHTML = whoSheet(S.run.stops[+d.i]); },
   unsheet: () => { $("sheet").innerHTML = ""; },
+  nophone: d => toast(d.n ? `Телефону ще немає: ${d.n}` : "Менеджера цієї точки в 1С не знайдено"),
   dial: d => { const u = location.origin + "/t/" + String(d.n).replace(/\D/g, ""); tg && tg.openLink ? tg.openLink(u) : window.open(u); },
   all: () => mark("all"),
   today: () => mark("today"),

@@ -290,7 +290,11 @@ def test_load_run_from_1c():
             assert by["Салон Чотири"]["where"] == "debt"
             assert [s["where"] for s in run["stops"]] == ["route", "route", "skip", "debt"]   # копійчане сальдо сховано
             await handlers.load_debts(one)                                        # борг по накладних, без сьогоднішньої
-            assert one["debts"] == [{"ref": "old1", "no": "419", "date": "2026-11-10", "sum": 830.0}]
+            assert one["debts"] == [{"ref": "old1", "no": "419", "date": "2026-11-10", "sum": 830.0,
+                                     "manager": "Тестова Олена"}]                 # менеджер старої накладної
+            assert one["inv"][0]["manager"] == "Тестова Олена" and "Тестова Олена" in one["recent_mgrs"]
+            from reys import engine
+            assert engine.managers(one) == ["Тестова Олена"] and engine.debt_managers(one) == ["Тестова Олена"]
             items = await handlers.load_items(one)
             assert (0, 1, "Фарба тест", 2, 200.0) in items and (0, 2, "Окисник тест", 1, 668.0) in items
             assert (await handlers.list_sheets(dt.date(2026, 11, 17))) is not None

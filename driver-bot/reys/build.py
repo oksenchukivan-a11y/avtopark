@@ -71,7 +71,8 @@ def build_run(sheet, invoices, names, agents, orders):
             tg.add("DATE")
         st["inv"].append({"ref": inv["Ref_Key"], "no": short_no(inv["Number"]), "sum": round(inv["СуммаДокумента"], 2),
                           "date": inv["Date"][:10], "tags": sorted(tg), "comment": short_comment(comment),
-                          "deliver": when.isoformat() if when and when > day else ""})
+                          "deliver": when.isoformat() if when and when > day else "",
+                          "manager": agents.get(inv.get("Агент_Key"), "")})       # менеджер — у кожної накладної свій
         st["manager"] = st["manager"] or agents.get(inv.get("Агент_Key"), "")
     for st in stops:
         classify(st)
@@ -98,19 +99,19 @@ def classify(st):
 
 def demo_run(today: date):
     """Вигаданий рейс для знайомства з кнопками, коли 1С ще не підключено."""
-    def inv(no, s, comment=""):
+    def inv(no, s, comment="", mgr=""):
         tg = tags_of(comment)
         when = delivery_date(comment, today)
         if when and when > today:
             tg.add("DATE")
         return {"ref": f"demo-{no}", "no": str(no), "sum": s, "date": today.isoformat(), "tags": sorted(tg),
-                "comment": comment, "deliver": when.isoformat() if when and when > today else ""}
+                "comment": comment, "deliver": when.isoformat() if when and when > today else "", "manager": mgr}
     raw = [("Салон А", "вул. Прикладна, 12", "Саша", 0, [inv(1204, 1501.0, "доставка в салон")], None),
            ("Салон Б", "просп. Зразковий, 40", "Оля", 3600.0, [inv(1207, 500.0, "набрати за 10 хв")],
             [{"ref": "demo-1101", "no": "1101", "date": "2026-11-04", "sum": 2000.0},
              {"ref": "demo-1158", "no": "1158", "date": "2026-11-11", "sum": 1600.0}]),
            ("Студія В", "вул. Тестова, 3", "Саша", 0, [inv(1209, 860.0, "б/о, подарунок якщо є")], None),
-           ("Барбершоп Г", "вул. Показова, 7", "Іра", 0, [inv(1211, 1240.0, "віддати Тані"), inv(1212, 380.0)], None),
+           ("Барбершоп Г", "вул. Показова, 7", "Іра", 0, [inv(1211, 1240.0, "віддати Тані"), inv(1212, 380.0, mgr="Оля")], None),   # два менеджери в одній точці
            ("Салон Д", "вул. Умовна, 21", "Оля", 950.0, [inv(1215, 2007.01)],
             [{"ref": "demo-1160", "no": "1160", "date": "2026-11-12", "sum": 950.0}]),
            ("Майстер Е", "вул. Вигадана, 5", "Іра", 0, [inv(1216, 640.0, "св, забере сьогодні")], None),
@@ -119,8 +120,11 @@ def demo_run(today: date):
             [{"ref": "demo-950", "no": "950", "date": "2026-11-19", "sum": 1332.0}])]
     stops = []
     for name, addr, mgr, debt, invs, debts in raw:
+        for x in invs:
+            x["manager"] = x["manager"] or mgr
         st = {"key": f"demo-{name}", "name": name, "addr": addr, "sheet_debt": float(debt), "inv": invs,
-              "debts": debts if debts is not None else [], "manager": mgr, "status": None, "probs": []}
+              "debts": [{**d, "manager": mgr} for d in debts] if debts is not None else [],
+              "manager": mgr, "status": None, "probs": []}
         classify(st)
         stops.append(st)
     return {"sheet_ref": "demo", "sheet_no": "демо", "day": today.isoformat(), "printed": "13:00",

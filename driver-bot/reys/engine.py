@@ -140,3 +140,25 @@ def totals(run):
             "back": sum(1 for s in done if s["status"]["kind"] == "back"),
             "probs": sum(len(s["probs"]) for s in run["stops"]),
             "left": len(open_stops(run)), "stops": len(route(run))}
+
+
+def _uniq(names):
+    out = []
+    for n in names:
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def managers(st):
+    """Усі менеджери точки: спершу чиї накладні їдуть сьогодні, далі решта сьогоднішніх, борги, недавні продажі.
+    Салон часто ведуть двоє (манікюр і волосся) — водієві потрібен той, чий товар."""
+    ride = riding(st)
+    return _uniq([i.get("manager", "") for i in ride] + [i.get("manager", "") for i in st["inv"]]
+                 + [d.get("manager", "") for d in (st.get("debts") or [])]
+                 + list(st.get("recent_mgrs") or []) + [st.get("manager", "")])
+
+
+def debt_managers(st):
+    """Кому дзвонити через борг: менеджери неоплачених накладних; якщо невідомо — усі менеджери точки."""
+    return _uniq(d.get("manager", "") for d in debts(st)) or managers(st)

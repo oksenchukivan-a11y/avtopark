@@ -18,7 +18,20 @@ def _debt_name(d):
     return f"№ {d['no']}" + (f" від {dm(d['date'])}" if d.get("date") else "")
 
 
-def stop_view(st, i, phones):
+def short_name(name: str) -> str:
+    """«Прізвище Ім'я» → «Ім'я»: так менеджера називає водій."""
+    parts = name.split()
+    return parts[1] if len(parts) > 1 else name
+
+
+def mgr_view(name, people):
+    phone, direction = people.get(name, ("", ""))
+    short = short_name(name) if direction else name      # скорочуємо тільки тих, кому задано напрямок
+    return {"name": name, "short": short, "dir": direction, "phone": phone or "",
+            "label": short + (f" · {direction}" if direction else "")}
+
+
+def stop_view(st, i, people):
     ride = e.riding(st)
     free = e.free(st)
     comments = []
@@ -32,18 +45,20 @@ def stop_view(st, i, phones):
         why = [SKIP_WHY[t] for t in ("SV", "NP", "DATE") if t in inv["tags"]]
         if why:
             wait.append({"no": inv["no"], "sum": inv["sum"], "why": why[0], "when": dm(inv.get("deliver", ""))})
-    mgr = st.get("manager", "")
-    if mgr not in phones:
-        phones[mgr] = store.phone(mgr) if mgr else None
+    mgrs = [mgr_view(n, people) for n in e.managers(st)]
+    many = len(mgrs) > 1
+    mgr = mgrs[0]["name"] if mgrs else ""
     s = st["status"]
     return {
         "i": i, "where": st["where"], "name": st["name"], "addr": st["addr"], "manager": mgr,
-        "mphone": phones[mgr] or "", "phones": st.get("phones") or [],
+        "mgrs": mgrs, "debt_mgrs": e.debt_managers(st), "phones": st.get("phones") or [],
         "comments": comments, "flags": [LABELS[t] for t in flags], "free": free,
         "due": e.due(st), "today": e.today_due(st), "debt": e.debt_due(st),
-        "ride": [{"ref": x["ref"], "no": x["no"], "sum": x["sum"], "bo": "BO" in x["tags"]} for x in ride],
+        "ride": [{"ref": x["ref"], "no": x["no"], "sum": x["sum"], "bo": "BO" in x["tags"],
+                  "mgr": x.get("manager", ""), "who": mgr_view(x.get("manager", ""), people)["short"] if many else ""} for x in ride],
         "wait": wait,
-        "debts": [{"name": _debt_name(d), "sum": d["sum"]}
+        "debts": [{"name": _debt_name(d), "sum": d["sum"], "mgr": d.get("manager", ""),
+                   "who": mgr_view(d.get("manager", ""), people)["short"] if many else ""}
                   for d in sorted(e.debts(st), key=lambda d: d.get("date", ""))],
         "pay": [{"k": k, "name": _debt_name(p) if p["old"] else f"№ {p['no']} · сьогодні", "sum": p["sum"],
                  "old": p["old"]} for k, p in enumerate(e.payable(st))],
@@ -57,8 +72,8 @@ def stop_view(st, i, phones):
 
 
 def run_view(run):
-    phones = {}
-    stops = [stop_view(st, i, phones) for i, st in enumerate(run["stops"])]
+    people = store.people()
+    stops = [stop_view(st, i, people) for i, st in enumerate(run["stops"])]
     t = e.totals(run)
     left = round(sum(s["due"] for s in stops if s["where"] == "route" and not s["status"]), 2)
     order = [s["i"] for s in stops if s["where"] == "route"]
