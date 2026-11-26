@@ -1,6 +1,6 @@
 """Збирає рейс із даних 1С: путівка + накладні + коментарі заявок → список точок."""
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from .onec import ZERO
 from .tags import delivery_date, short_comment, tags_of
@@ -36,6 +36,19 @@ def direction(cities) -> str:
         return "Суми · місто"
     names = [top[0][0]] + [n for n, k in top[1:2] if k >= max(2, 0.15 * total)]
     return " · ".join(names)
+
+
+EVENING = 14            # путівку, надруковану після цієї години, везуть наступного дня (обласні друкують близько 16:30)
+
+
+def ride_day(printed: datetime, where: str = "") -> date:
+    """День, коли путівку везуть. Міську (Суми) — того ж дня; обласну, надруковану ввечері, — наступного
+    робочого дня (неділю пропускаємо)."""
+    d = printed.date()
+    if printed.hour < EVENING or where.startswith("Суми"):
+        return d
+    d += timedelta(days=1)
+    return d + timedelta(days=1) if d.weekday() == 6 else d
 
 
 def split_name(full: str):
@@ -75,9 +88,10 @@ def match_orders(invoices, orders):
     return out
 
 
-def build_run(sheet, invoices, names, agents, orders):
-    """sheet — документ путівки з рядками; решта — довідкові вибірки. Повертає словник рейсу."""
-    day = _dt(sheet["Date"]).date()
+def build_run(sheet, invoices, names, agents, orders, day: date = None):
+    """sheet — документ путівки з рядками; решта — довідкові вибірки. Повертає словник рейсу.
+    day — день рейсу; для вечірньої обласної путівки це наступний день, а не дата друку."""
+    day = day or _dt(sheet["Date"]).date()
     inv_by = {i["Ref_Key"]: i for i in invoices}
     order_of = match_orders(invoices, orders)
     stops, index = [], {}

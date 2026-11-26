@@ -581,7 +581,7 @@ def test_sheet_is_named_by_direction_not_number():
         async with Drivers() as app:
             m = (await app.call("state"))[1]["menu"]["sheets"]
             assert (m[0]["title"], m[0]["sub"]) == ("Суми · місто", "9 точок · 13:01 · № 8389")
-            assert (m[1]["title"], m[1]["sub"]) == ("Охтирка · Тростянець", "68 точок · 16:26 · № 8390")
+            assert (m[1]["title"], m[1]["sub"]) == ("Охтирка · Тростянець", "68 точок · на 27.11 · № 8390")   # вечірня — на завтра
             calls = []
 
             async def boom(ref):
@@ -594,3 +594,80 @@ def test_sheet_is_named_by_direction_not_number():
             m = (await app.call("menu"))[1]["menu"]["sheets"]                                   # 1С мовчить — меню живе
             assert m[0]["title"] == "Путівка 13:01" and m[0]["sub"] == "13:01 · № 8389" and len(calls) == 2
     asyncio.run(go())
+
+
+def test_evening_regional_sheet_is_seen_next_morning():
+    """Обласні путівки в 1С створюють напередодні близько 16:30 — уранці водій має їх бачити."""
+    import datetime as dt
+    from reys import build
+    rd = build.ride_day
+    assert rd(dt.datetime(2026, 11, 26, 13, 1), "Суми · місто") == dt.date(2026, 11, 26)        # міська — того ж дня
+    assert rd(dt.datetime(2026, 11, 26, 16, 31), "Охтирка · Тростянець") == dt.date(2026, 11, 27)
+    assert rd(dt.datetime(2026, 11, 26, 14, 30), "Суми · місто") == dt.date(2026, 11, 26)       # пізно надрукована міська
+    assert rd(dt.datetime(2026, 11, 28, 16, 30), "Ромни") == dt.date(2026, 11, 30)              # субота ввечері → понеділок
+
+    rows = [{"Ref_Key": "fri-eve", "Number": "1", "Date": "2026-11-27T16:30:00"},
+            {"Ref_Key": "sat-day", "Number": "2", "Date": "2026-11-28T13:00:00"},
+            {"Ref_Key": "sun-eve", "Number": "3", "Date": "2026-11-29T16:30:00"},
+            {"Ref_Key": "mon-day", "Number": "4", "Date": "2026-11-30T13:00:00"},
+            {"Ref_Key": "mon-eve", "Number": "5", "Date": "2026-11-30T16:30:00"}]
+    asked = []
+
+    async def read(since, until):
+        asked.append((since, until))
+        return [r for r in rows if since <= r["Date"] <= until]
+
+    async def go():
+        async with App():
+            old, handlers.read_sheets = handlers.read_sheets, read
+            try:
+                mon = [s["Ref_Key"] for s in await handlers.list_sheets(dt.date(2026, 11, 30))]
+                assert mon == ["fri-eve", "sun-eve", "mon-day", "mon-eve"] and asked[-1][0] == "2026-11-27T14:00:00"
+                tue = [s["Ref_Key"] for s in await handlers.list_sheets(dt.date(2026, 12, 1))]
+                assert tue == ["mon-eve"] and asked[-1][0] == "2026-11-30T14:00:00"            # учорашня денна вже не показується
+                run = {"sheet_ref": "mon-eve", "sheet_no": "5", "day": "2026-12-01", "stops": [], "expenses": []}
+                store.close(store.create(ME, run), run)                                          # касу здано — зникає
+                assert await handlers.list_sheets(dt.date(2026, 12, 1)) == []
+            finally:
+                handlers.read_sheets = old
+    asyncio.run(go())
+
+
+def test_delivery_date_counts_from_ride_day():
+    """«Доставка 27.11» у путівці, надрукованій 26.11 ввечері на 27.11, — це сьогоднішня точка, а не «не їде»."""
+    import datetime as dt
+    from reys import build
+    sheet = {"Ref_Key": "s", "Number": "0008393", "Date": "2026-11-26T16:31:00",
+             "Контрагенты": [{"Контрагент_Key": "c1", "Документ_Key": "i1", "Долг": 0},
+                             {"Контрагент_Key": "c2", "Документ_Key": "i2", "Долг": 0}]}
+    inv = [{"Ref_Key": "i1", "Number": "1", "Date": "2026-11-26T15:00:00", "СуммаДокумента": 100.0, "Контрагент_Key": "c1"},
+           {"Ref_Key": "i2", "Number": "2", "Date": "2026-11-26T15:10:00", "СуммаДокумента": 200.0, "Контрагент_Key": "c2"}]
+    orders = [{"Date": "2026-11-26T12:00:00", "Комментарий": "доставка 27.11", "СуммаДокумента": 100.0, "Контрагент_Key": "c1"},
+              {"Date": "2026-11-26T12:05:00", "Комментарий": "доставка 30.11", "СуммаДокумента": 200.0, "Контрагент_Key": "c2"}]
+    names = {"c1": "Салон Один", "c2": "Салон Два"}
+    old = build.build_run(sheet, inv, names, {}, orders)                                        # як було: день друку
+    new = build.build_run(sheet, inv, names, {}, orders, day=dt.date(2026, 11, 27))
+    assert [s["where"] for s in old["stops"]] == ["skip", "skip"]
+    assert [s["where"] for s in new["stops"]] == ["route", "skip"] and new["day"] == "2026-11-27"
+
+
+def test_day_hours_come_from_the_bot_schedule():
+    """Ранні обласні рейси: графік дня веде бот (reys_hours.day_hours); свій графік людини в REYS_HOURS важливіший."""
+    import sys
+    import types
+    os.environ.pop("REYS_HOURS", None)
+    assert web.hours(333) == (9, 18)                                                             # файлу бота немає
+    mod = types.ModuleType("reys_hours")
+    mod.day_hours = lambda: (5, 21)
+    sys.modules["reys_hours"] = mod
+    try:
+        assert web.hours(333) == (5, 21)
+        os.environ["REYS_HOURS"] = "333=8-17"
+        assert web.hours(333) == (8, 17) and web.hours(444) == (5, 21)
+        mod.day_hours = lambda: (30, 2)                                                          # нісенітниця → 9–18
+        assert web.hours(444) == (9, 18)
+        mod.day_hours = lambda: 1 / 0
+        assert web.hours(444) == (9, 18)
+    finally:
+        sys.modules.pop("reys_hours", None)
+        os.environ.pop("REYS_HOURS", None)

@@ -212,3 +212,9 @@ def set_title(sheet_ref, name, points):
         c.execute("INSERT INTO reys_titles(sheet_ref, title, points, ts) VALUES(?,?,?,?) ON CONFLICT(sheet_ref) "
                   "DO UPDATE SET title=excluded.title, points=excluded.points, ts=excluded.ts",
                   (sheet_ref, name, int(points), now()))
+
+
+def closed_refs():
+    """Путівки, по яких касу вже здано."""
+    with db() as c:
+        return {r["sheet_ref"] for r in c.execute("SELECT DISTINCT sheet_ref FROM reys_runs WHERE status='closed'")}

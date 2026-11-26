@@ -190,11 +190,23 @@ def load_snapshot(stem: str):
 
 # ---------- завантаження з 1С ----------
 
-async def list_sheets(day: date):
-    d0 = day.isoformat()
+async def read_sheets(since: str, until: str):
     return await onec.call("query", object="Document_ПутевойЛист", select="Ref_Key,Number,Date",
-                           filter=f"Date ge datetime'{d0}T00:00:00' and Date le datetime'{d0}T23:59:59'",
-                           orderby="Date", top=20)
+                           filter=f"Date ge datetime'{since}' and Date le datetime'{until}'", orderby="Date", top=40)
+
+
+async def list_sheets(day: date):
+    """Путівки на день: надруковані цього дня і вечірні з попереднього робочого дня, по яких касу ще не здано.
+    Обласні в 1С створюють напередодні близько 16:30 — без цього водій уранці своєї путівки не бачить."""
+    back = 3 if day.weekday() == 0 else 1                 # у понеділок дивимось до п'ятниці
+    since = f"{(day - timedelta(days=back)).isoformat()}T{build.EVENING:02d}:00:00"
+    rows = await read_sheets(since, f"{day.isoformat()}T23:59:59")
+    done, out = store.closed_refs(), []
+    for s in rows:
+        printed = datetime.fromisoformat(s["Date"][:19])
+        if printed.date() == day or (printed.hour >= build.EVENING and s["Ref_Key"] not in done):
+            out.append(s)
+    return out
 
 
 async def sheet_cities(ref: str):
@@ -221,8 +233,10 @@ async def sheet_label(stub):
             log.warning("reys: напрямок путівки %s не визначено: %s", no, e)
             got = ("", 0)
     name, points = got
+    ride = build.ride_day(datetime.fromisoformat(stub["Date"][:19]), name)
+    when = f"на {ride:%d.%m}" if ride.isoformat() != stub["Date"][:10] else hhmm      # вечірня — «на завтра»
     sub = " · ".join(x for x in (f"{points} {ui.plural(points, 'точка', 'точки', 'точок')}" if points else "",
-                                 hhmm, f"№ {no}") if x)
+                                 when, f"№ {no}") if x)
     return (name or f"Путівка {hhmm}"), sub
 
 
@@ -247,10 +261,11 @@ async def load_run(ref: str):
         "Document_ЗаказПокупателя", with_inv, "Date,Комментарий,СуммаДокумента,Контрагент_Key",
         field="Контрагент_Key",
         extra=f"Date ge datetime'{since}T00:00:00' and Date le datetime'{sheet['Date'][:19]}' and Posted eq true")
-    run = build.build_run(sheet, invoices, names, agents, orders)
     where = build.direction([r.get("ДополнительноеОписание", "") for r in cards if r["Ref_Key"] in with_inv])
+    ride = build.ride_day(day, where)                            # вечірню обласну везуть наступного дня
+    run = build.build_run(sheet, invoices, names, agents, orders, day=ride)
     if where:                                                    # у шапці рейсу — куди їдемо, а не номер
-        run["title"] = f"{where} · {day:%d.%m}"
+        run["title"] = f"{where} · {ride:%d.%m}"
     AGENTS.update(agents)
     await load_phones(run)
     await load_recent_managers(run, day)

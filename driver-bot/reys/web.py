@@ -41,7 +41,14 @@ def hours(uid=None):
             common = span
         elif uid is not None and int(m.group(1)) == uid:
             own = span
-    return own or common or (9, 18)
+    if own or common:
+        return own or common
+    try:                                    # графік дня тижня веде бот (рання обласна — з 5–7 ранку)
+        from reys_hours import day_hours
+        a, b = day_hours()
+        return (int(a), int(b)) if 0 <= int(a) < int(b) <= 24 else (9, 18)
+    except Exception:
+        return 9, 18
 
 
 def working(uid, now: datetime = None) -> bool:
