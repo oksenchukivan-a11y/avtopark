@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, ExceptionTypeFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
+from aiogram.types import CallbackQuery, ErrorEvent, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from . import build, engine, onec, store, ui
 
@@ -51,9 +51,18 @@ class Refused(Exception):
     """Відмова, яку показуємо людині як є."""
 
 
+def trial_ids() -> set:
+    """Чиї рейси пробні: власника і його «водійського» акаунта для перегляду (REYS_PREVIEW).
+    Пробний рейс не ховає путівку з меню і не заважає водієві її відкрити."""
+    return ({ADMIN} if ADMIN else set()) | ids_from_env("REYS_PREVIEW")
+
+
+CREW_MAX = 2                 # рішення власника 27.11: путівку везе екіпаж з одного-двох водіїв, усе навпіл
+
+
 def may_open(uid, sheet_ref) -> bool:
-    """Чужу путівку не відкрити: власник — будь-яку, водій — тільки закріплену за ним."""
-    return uid == ADMIN or store.assigned(sheet_ref) == uid
+    """Чужу путівку не відкрити: власник — будь-яку, водій — тільки ту, де він в екіпажі."""
+    return uid == ADMIN or uid in store.crew(sheet_ref)
 
 
 def guard_start(uid, new_run, force=False):
@@ -61,21 +70,39 @@ def guard_start(uid, new_run, force=False):
     Рейс з відмітками не скидається: у ньому гроші, які ще не здано касиру."""
     ref = new_run.get("sheet_ref", "")
     real = not new_run.get("demo") and not new_run.get("snap")
+    team = set(store.crew(ref)) if real else set()
     if real and uid != ADMIN:
-        if not may_open(uid, ref):
+        if uid not in team:
             raise Refused("Цю путівку за тобою не закріплено")
-        if store.taken_by(ref, uid):
+        if ref in store.closed_refs(ignore=trial_ids()):
+            raise Refused("По цій путівці касу вже здано")
+        if store.taken_by(ref, team | trial_ids()):
             raise Refused("Цю путівку вже відкрив інший водій")
     run_id, old = store.open_run(uid)
-    if not old:
-        return False
-    if real and old.get("sheet_ref") == ref:
+    mine = bool(old) and store.owner(run_id) == uid
+    same = bool(old) and real and old.get("sheet_ref") == ref and (mine or uid in team)
+    if same:
+        if not mine:
+            store.drop_idle(uid)                             # свій порожній (навчальний) рейс більше не потрібен
         return True
-    if engine.has_marks(old) and not (uid == ADMIN and force):
+    if old and not mine and engine.has_marks(old):           # рейс відкрив напарник — його не скинути й не обійти
+        raise Refused("У твого екіпажу відкритий рейс з відмітками. Спершу здайте в ньому касу.")
+    if old and engine.has_marks(old) and not (uid == ADMIN and force):
         raise Refused("У тебе відкритий рейс з відмітками. Спершу здай у ньому касу.")
-    if engine.has_marks(old):
+    if real and uid in team:
+        rid, by, _ = store.sheet_run(ref)                    # напарник уже відкрив цю путівку — заходимо в його рейс
+        if rid and by != uid:
+            store.drop_idle(uid)
+            return True
+    if old and mine and engine.has_marks(old):
         store.log(run_id, uid, "drop", **{k: v for k, v in engine.totals(old).items() if k != "why"})
     return False
+
+
+def shares(day=None):
+    """Для автозвіту: хто з ким їхав. {tg_id: [(путівка, частка 1.0 або 0.5, [напарники])]}.
+    Ящики й кілограми путівки діляться на цю частку."""
+    return store.shares(day or today())
 
 
 def sent(msg):
@@ -124,6 +151,17 @@ def markup(rows):
         [InlineKeyboardButton(text=t, callback_data=d) for t, d in row] for row in rows])
 
 
+def scr(run, chat_id):
+    """Екран рейсу в чаті цієї людини. Рейс в екіпажу один, а чат у кожного свій — тому екран теж у кожного свій."""
+    if "screens" in run:
+        return run["screens"].get(str(chat_id))
+    return run.get("screen")                                  # рейси, відкриті до екіпажів
+
+
+def set_scr(run, chat_id, mid):
+    run.setdefault("screens", {})[str(chat_id)] = mid
+
+
 async def show(cb: CallbackQuery, text, rows):
     try:
         await cb.message.edit_text(text, reply_markup=markup(rows), parse_mode="HTML")
@@ -134,7 +172,7 @@ async def show(cb: CallbackQuery, text, rows):
 
 async def reshow(bot: Bot, chat_id, run, text, rows):
     """Після введеного з клавіатури числа переписуємо той самий екран, а не шлемо новий."""
-    mid = run.get("screen")
+    mid = scr(run, chat_id)
     if mid:
         try:
             await bot.edit_message_text(text, chat_id=chat_id, message_id=mid, reply_markup=markup(rows),
@@ -143,7 +181,7 @@ async def reshow(bot: Bot, chat_id, run, text, rows):
         except TelegramBadRequest:
             pass
     m = await bot.send_message(chat_id, text, reply_markup=markup(rows), parse_mode="HTML")
-    run["screen"] = m.message_id
+    set_scr(run, chat_id, m.message_id)
 
 
 # ---------- знімки путівок ----------
@@ -202,7 +240,7 @@ async def list_sheets(day: date):
     back = 3 if day.weekday() == 0 else 1                 # у понеділок дивимось до п'ятниці
     since = f"{(day - timedelta(days=back)).isoformat()}T{build.EVENING:02d}:00:00"
     rows = await read_sheets(since, f"{day.isoformat()}T23:59:59")
-    done, out = store.closed_refs(), []
+    done, out = store.closed_refs(ignore=trial_ids()), []
     for s in rows:
         printed = datetime.fromisoformat(s["Date"][:19])
         if printed.date() == day or (printed.hour >= build.EVENING and s["Ref_Key"] not in done):
@@ -395,7 +433,7 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
     await state.clear()
     run_id, run = store.open_run(m.from_user.id)
     arg = (command.args or "").strip()
-    for mid in (m.message_id, (run or {}).get("screen")):       # у чаті лишається один екран рейсу
+    for mid in (m.message_id, scr(run or {}, m.chat.id)):       # у чаті лишається один екран рейсу
         if mid:
             try:
                 await m.bot.delete_message(m.chat.id, mid)
@@ -545,7 +583,7 @@ async def start_run(cb: CallbackQuery, run):
             return await show(cb, *ui.screen_list(store.open_run(cb.from_user.id)[1]))
     except Refused as e:
         return await cb.answer(str(e), show_alert=True)
-    run["screen"] = cb.message.message_id
+    set_scr(run, cb.message.chat.id, cb.message.message_id)
     run_id = store.create(cb.from_user.id, run)
     store.log(run_id, cb.from_user.id, "start", sheet=run["sheet_no"], stops=len(engine.route(run)))
     await show(cb, *ui.screen_list(run))
@@ -594,7 +632,7 @@ async def cb_list(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     if cb.data == "r:ld":
         run["show_done"] = not run.get("show_done")
-    run["screen"] = cb.message.message_id
+    set_scr(run, cb.message.chat.id, cb.message.message_id)
     store.save(run_id, run)
     await show(cb, *ui.screen_list(run, run.get("show_done", False)))
 
@@ -726,7 +764,7 @@ async def cb_sum(cb: CallbackQuery, state: FSMContext):
     run_id, run, i, st = await stop_ctx(cb)
     if run:
         await cb.answer()
-        run["screen"] = cb.message.message_id
+        set_scr(run, cb.message.chat.id, cb.message.message_id)
         store.save(run_id, run)
         await state.set_state(Reys.amount)
         await state.update_data(stop=i)
@@ -990,7 +1028,7 @@ async def cb_expense(cb: CallbackQuery, state: FSMContext):
     if not run:
         return
     await cb.answer()
-    run["screen"] = cb.message.message_id
+    set_scr(run, cb.message.chat.id, cb.message.message_id)
     store.save(run_id, run)
     await state.set_state(Reys.expense)
     await show(cb, "💸 <b>Витрата з каси рейсу</b>\nНова пошта чи інше, що оплатив із зібраних грошей.\n"
@@ -1035,3 +1073,15 @@ async def cb_hand(cb: CallbackQuery):
     await cb.answer("Касу здано")
     # екран рейсу замінюється одним підсумком — стрічка не росте
     await show(cb, ui.report(run, cb.from_user.full_name), [])
+
+
+@router.errors(ExceptionTypeFilter(store.Stale))
+async def on_stale(event: ErrorEvent):
+    """Двоє з екіпажу натиснули одночасно: другий запис відхилено, щоб не затерти перший."""
+    cb = event.update.callback_query
+    if cb:
+        try:
+            await cb.answer("Напарник щойно щось відмітив. Відкрий список і повтори.", show_alert=True)
+        except TelegramBadRequest:
+            pass
+    return True

@@ -8,7 +8,9 @@
   3. Захист від помилок людини: подвійне натискання, здача з невідміченими точками, «абв» замість суми, мінус,
      неіснуюча точка/позиція — має бути ввічлива відмова, а не збій.
   4. «Хаотичний водій»: тисячі випадкових натискань (зерно фіксоване — будь-яку знахідку можна повторити).
-  5. Кнопки бота: кожна кнопка кожного екрана — текст не порожній, дані кнопки ≤ 64 байти (ліміт Telegram);
+  5. Екіпаж із двох: один рейс і одна каса на двох, відмітки не губляться й не задвоюються, частки 50/50 і 100 %.
+  6. Звіт менеджерам: сума менеджера = оплати по його накладних, двоє на одній точці бачать кожен своє.
+  7. Кнопки бота: кожна кнопка кожного екрана — текст не порожній, дані кнопки ≤ 64 байти (ліміт Telegram);
      кожен код кнопки ловить рівно один обробник.
 Результат: data/robot/reys_YYYY-MM-DD_HHMM.json + короткий підсумок у вивід (і власнику в Telegram з ключем --tg).
 
@@ -44,22 +46,22 @@ def finding(kind, where, what, steps=None):
     FIND.append({"тип": kind, "де": where, "що": what, "кроки": steps or []})
 
 
-async def call(act, **a):
+async def call(act, _uid=None, **a):
     STATS["кроків"] += 1
     try:
-        return "ok", await web.ACTIONS[act](UID, a)
+        return "ok", await web.ACTIONS[act](_uid or UID, a)
     except web.Bad as e:
         STATS["відмов_ввічливих"] += 1
         return "bad", str(e)
 
 
-def run_now():
-    return store.open_run(UID)[1]
+def run_now(uid=None):
+    return store.open_run(uid or UID)[1]
 
 
-def check(tag, orig, steps):
+def check(tag, orig, steps, uid=None):
     """Гроші й стан після кроку. orig — початкові суми накладних {ref: sum}."""
-    run = run_now()
+    run = run_now(uid)
     if not run:
         return
     for s in run["stops"]:
@@ -263,6 +265,147 @@ async def scenario_managers():
 
 
 # ---------------- 3. захист від помилок людини ----------------
+BOSS, DRV_A, DRV_B = 999000010, 999000011, 999000012
+CREW_REF = "00000000-0000-0000-0000-00000000c0de"
+SOLO_REF = "00000000-0000-0000-0000-0000000050f0"
+
+
+async def scenario_crew(seed=7):
+    """Рішення власника 27.11: путівку везе екіпаж з одного-двох водіїв — рейс і каса одні, усе навпіл."""
+    STATS["сценаріїв"] += 1
+    rnd = random.Random(seed)
+    keep = (hd.ADMIN, set(hd.TESTERS), hd.load_run, onec.URL)
+
+    async def load(ref):
+        run = build.demo_run(hd.today())
+        run.pop("demo")
+        run.update(sheet_ref=ref, sheet_no=ref[-4:])
+        return run
+    hd.ADMIN, hd.load_run = BOSS, load
+    hd.TESTERS.clear()
+    hd.TESTERS.update({BOSS, DRV_A, DRV_B})
+    try:
+        for d in (DRV_A, DRV_B):
+            if (await call("assign", _uid=BOSS, id="1c:" + CREW_REF, to=d))[0] != "ok":
+                finding("екіпаж", "закріплення", f"власник не зміг додати водія {d} в екіпаж")
+        if (await call("assign", _uid=DRV_A, id="1c:" + SOLO_REF, to=DRV_A))[0] == "ok":
+            finding("захист", "закріплення", "водій сам закріпив за собою путівку")
+        if (await call("assign", _uid=BOSS, id="1c:" + CREW_REF, to=BOSS))[0] == "ok":
+            finding("захист", "закріплення", "в екіпаж потрапила людина не зі списку водіїв")
+        await call("start", _uid=DRV_A, id="1c:" + CREW_REF)
+        await call("start", _uid=DRV_B, id="1c:" + CREW_REF)
+        ida, idb = store.open_run(DRV_A)[0], store.open_run(DRV_B)[0]
+        if not ida or ida != idb:
+            finding("екіпаж", "один рейс на двох", f"у водіїв різні рейси: {ida} і {idb}")
+        orig = {inv["ref"]: inv["sum"] for s in run_now(DRV_A)["stops"] for inv in s["inv"]}
+        steps, events = [], 0
+        for k in route_idx(run_now(DRV_A)):
+            who, other = rnd.sample([DRV_A, DRV_B], 2)
+            act = rnd.choice(["all", "today", "amount", "none"])
+            a = {"i": k, "sum": str(rnd.randint(50, 900)), "reason": "acct"}
+            first = await call(act, _uid=who, **a)
+            steps.append(f"{who % 100}:{act}({k})→{first[0]}")
+            again = await call(rnd.choice(["all", "today"]), _uid=other, i=k)          # напарник тисне ту саму точку
+            marked = run_now(who)["stops"][k]["status"]
+            if marked and again[0] == "ok":
+                finding("екіпаж", "та сама точка двічі", f"точку {k} відмітили обидва — гроші могли задвоїтись", steps[-4:])
+            ta, tb = engine.totals(run_now(DRV_A)), engine.totals(run_now(DRV_B))
+            if ta != tb:
+                finding("екіпаж", "каса", f"водії бачать різні підсумки: {ta['cash']} і {tb['cash']}", steps[-4:])
+            real = round(sum(s["status"]["cash"] for s in run_now(DRV_A)["stops"] if s["status"]), 2)
+            if abs(real - ta["cash"]) > 0.01:
+                finding("гроші", "екіпаж", f"каса {ta['cash']} ≠ сума по точках {real}", steps[-4:])
+            check("екіпаж", orig, steps[-4:], uid=DRV_A)
+        # одночасно: поки один тримає стару копію рейсу, другий записує — стара копія не має лягти поверх
+        rid, mine = store.open_run(DRV_A)
+        _, theirs = store.open_run(DRV_B)
+        mine["expenses"].append({"kind": "Інше", "sum": 10.0, "ts": store.now()})
+        store.save(rid, mine)
+        cash = engine.totals(theirs)["cash"]
+        for s in theirs["stops"]:
+            s["status"] = None
+        try:
+            store.save(rid, theirs)
+            finding("екіпаж", "одночасний запис", f"стара копія рейсу затерла відмітки напарника (каса {cash} → 0)")
+        except store.Stale:
+            pass
+        if engine.totals(run_now(DRV_A))["spent"] != 10.0:
+            finding("екіпаж", "одночасний запис", "витрата напарника загубилась")
+        got = store.shares(hd.today())
+        want = {DRV_A: [(CREW_REF, 0.5, [DRV_B])], DRV_B: [(CREW_REF, 0.5, [DRV_A])]}
+        if got != want:
+            finding("екіпаж", "розподіл", f"двоє в екіпажі мають ділити навпіл, а вийшло {got}")
+        if (await call("start", _uid=DRV_B, id="demo"))[0] == "ok" and store.open_run(DRV_B)[0] != rid:
+            finding("екіпаж", "рейс з грошима", "водій пішов з рейсу екіпажу в інший, не здавши касу")
+        if (await call("assign", _uid=BOSS, id="1c:" + CREW_REF, to=DRV_B, on=False))[0] == "ok":
+            finding("екіпаж", "зміна екіпажу", "водія зняли з рейсу, у якому вже є відмітки")
+        hand = engine.totals(run_now(DRV_A))["hand"]
+        r = await call("close", _uid=DRV_B)
+        if r[0] != "ok" or abs(r[1]["done"]["hand"] - hand) > 0.01:
+            finding("екіпаж", "здача каси", f"напарник не зміг здати спільну касу або сума інша: {r}")
+        if run_now(DRV_A) or run_now(DRV_B):
+            finding("екіпаж", "здача каси", "після здачі в когось із екіпажу рейс лишився відкритим")
+        with store.db() as c:
+            n = c.execute("SELECT COUNT(*) n FROM reys_runs WHERE sheet_ref=? AND status='closed'", (CREW_REF,)).fetchone()["n"]
+        if n != 1:
+            finding("гроші", "екіпаж", f"по путівці екіпажу здано {n} кас замість однієї — каса задвоїлась")
+        if (await call("start", _uid=DRV_A, id="1c:" + CREW_REF))[0] == "ok" and run_now(DRV_A):
+            finding("екіпаж", "здача каси", "здану путівку відкрили вдруге")
+        # один водій — уся путівка його
+        await call("assign", _uid=BOSS, id="1c:" + SOLO_REF, to=DRV_A)
+        await call("start", _uid=DRV_A, id="1c:" + SOLO_REF)
+        solo = store.shares(hd.today()).get(DRV_A, [])
+        if (SOLO_REF, 1.0, []) not in solo:
+            finding("екіпаж", "розподіл", f"один водій має отримати 100 %, а вийшло {solo}")
+        if run_now(DRV_B):
+            finding("захист", "екіпаж", "чужий рейс видно водієві, якого немає в екіпажі")
+        for uid, rows in store.shares(hd.today()).items():
+            for ref, part, mates in rows:
+                if abs(part * (len(mates) + 1) - 1) > 0.01:
+                    finding("екіпаж", "розподіл", f"частки по путівці {ref[-4:]} не дають 100 %: {part} × {len(mates) + 1}")
+    finally:
+        with store.db() as c:
+            c.execute("UPDATE reys_runs SET status='dropped' WHERE tg_id IN (?,?,?) AND status='open'", (BOSS, DRV_A, DRV_B))
+            c.execute("DELETE FROM reys_crew")
+        hd.ADMIN, hd.load_run, onec.URL = keep[0], keep[2], keep[3]
+        hd.TESTERS.clear()
+        hd.TESTERS.update(keep[1])
+
+
+async def scenario_mgr_report(seed=3):
+    """Рішення власника 27.11: після здачі каси менеджер бачить своїх клієнтів — що забрано, що ні і чому."""
+    from reys import mgr_report
+    STATS["сценаріїв"] += 1
+    rnd = random.Random(seed)
+    await fresh()
+    for k in route_idx(run_now()):
+        act = rnd.choice(["all", "today", "amount", "none", "given"])
+        await call(act, i=k, sum=str(rnd.randint(50, 900)), reason=rnd.choice(["acct", "mgr", "closed", "atpoint"]))
+    run = run_now()
+    reps = mgr_report.build(run, "перевірка", "робот")
+    total = 0
+    for m, text in reps.items():
+        refs = {i["ref"] for s in run["stops"] for i in s["inv"] if engine.clean(i.get("manager")) == m}
+        refs |= {d["ref"] for s in run["stops"] for d in engine.debts(s) if engine.clean(d.get("manager")) == m}
+        got = round(sum(x["paid"] for s in run["stops"] if s["status"] for x in s["status"]["alloc"] if x["ref"] in refs), 2)
+        total += got
+        if f"Забрано <b>{engine.money(got)}</b>" not in text:
+            finding("гроші", "звіт менеджеру", f"у звіті сума не та, що оплачено по накладних менеджера ({got})")
+        if len(text) > 4000:
+            finding("кнопки", "звіт менеджеру", f"звіт довший за ліміт Telegram: {len(text)} знаків")
+        for other in reps:
+            if other != m and view.mgr_view(other, {})["label"] in text.split("твої клієнти")[0]:
+                finding("логіка", "звіт менеджеру", "у шапці звіту — чужий менеджер")
+    if total - engine.totals(run)["cash"] > 0.01:
+        finding("гроші", "звіт менеджерам", f"менеджерам разом показано {total}, а зібрано {engine.totals(run)['cash']}")
+    two = [s for s in run["stops"] if s["status"] and len({engine.clean(i.get("manager")) for i in engine.riding(s)} - {""}) > 1]
+    for s in two:
+        seen = [m for m, text in reps.items() if s["name"] in text]
+        names = {engine.clean(i.get("manager")) for i in engine.riding(s)}
+        if set(seen) < names:
+            finding("логіка", "звіт менеджерам", f"{s['name']}: точку ведуть двоє, а у звіті вона не в кожного")
+
+
 async def scenario_guards():
     STATS["сценаріїв"] += 1
     await fresh()
@@ -453,7 +596,8 @@ async def main():
     t0 = time.time()
     for name, coro in [("сценарій", scenario_full()), ("товар списком", scenario_list()),
                        ("інший товар", scenario_other()), ("менеджери", scenario_managers()),
-                       ("захист", scenario_guards()),
+                       ("захист", scenario_guards()), ("екіпаж", scenario_crew()),
+                       ("звіт менеджерам", scenario_mgr_report()),
                        ("кнопки бота", scenario_bot_buttons())]:
         try:
             await coro

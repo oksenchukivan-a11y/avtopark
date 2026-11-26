@@ -92,7 +92,10 @@ def run_view(run):
     left = round(sum(s["due"] for s in stops if s["where"] == "route" and not s["status"]), 2)
     order = [s["i"] for s in stops if s["where"] == "route"]
     title = "Демо-рейс" if run.get("demo") else (run.get("title") or f"Рейс {dm(run['day'])}")
+    names = store.known_people()
+    team = [] if run.get("demo") or run.get("snap") else store.crew(run.get("sheet_ref", ""))
     return {"title": title, "demo": bool(run.get("demo")), "closed": bool(run.get("closed")),
+            "crew": [names.get(t, str(t)) for t in team], "ver": run.get("_ver", 0),
             "stops": stops, "order": order, "left_sum": left, "totals": t,
             "expenses": [{"kind": x["kind"], "sum": x["sum"]} for x in run["expenses"]],
             "reasons": e.REASONS, "problems": e.PROBLEMS, "other_kinds": list(e.OTHER_KINDS)}

@@ -115,6 +115,15 @@ def _run(uid):
     return run_id, run
 
 
+def _put(run_id, run, a, field):
+    """Те, що прочитали з 1С, дописуємо у свіжу копію рейсу: поки чекали, напарник міг відмітити точку."""
+    i = int(a.get("i"))
+    fresh = store.get(run_id)
+    if fresh and i < len(fresh["stops"]) and fresh["stops"][i].get(field) is None:
+        fresh["stops"][i][field] = run["stops"][i][field]
+        store.save(run_id, fresh)
+
+
 def _stop(run, a, free=False):
     try:
         i = int(a.get("i"))
@@ -139,21 +148,23 @@ def _money(v):
 
 
 async def menu(uid, day=None):
-    """Що ця людина може відкрити. Власник бачить усі путівки дня і закріплює їх за водіями;
-    водій — тільки закріплені за ним. Знімки — лише власникові, навчальний рейс — усім."""
+    """Що ця людина може відкрити. Власник бачить усі путівки дня і складає екіпаж (один-двоє водіїв);
+    водій — тільки ті, де він в екіпажі. Знімки — лише власникові, навчальний рейс — усім."""
     day = day or hd.today()
     admin = uid == hd.ADMIN
     sheets, note = [], ""
-    names, own = store.known_people(), store.assignments()
+    names, own, done = store.known_people(), store.crews(), store.closed_refs(ignore=hd.trial_ids())
     if onec.configured():
         try:
             for s in await hd.list_sheets(day):
                 ref = s["Ref_Key"]
-                if admin or own.get(ref) == uid:
+                team = own.get(ref, [])
+                if admin or (uid in team and ref not in done):       # здану путівку водієві вже не показуємо
                     name, sub = await hd.sheet_label(s)
-                    row = {"id": "1c:" + ref, "title": name, "sub": sub}
+                    row = {"id": "1c:" + ref, "title": name, "sub": sub,
+                           "mates": [names.get(t, str(t)) for t in team if t != uid]}    # з ким їдеш
                     if admin:
-                        row.update(to=own.get(ref) or 0, who=names.get(own.get(ref), "") if own.get(ref) else "")
+                        row.update(crew=team, who=" + ".join(names.get(t, str(t)) for t in team), done=ref in done)
                     sheets.append(row)
             if not sheets:
                 note = f"За {day:%d.%m} путівок у 1С ще немає." if admin else "Путівку за тобою ще не закріплено."
@@ -165,6 +176,7 @@ async def menu(uid, day=None):
     out = {"sheets": sheets, "note": note, "locked": bool(run and engine.has_marks(run) and not admin)}
     if admin:
         out["people"] = [{"id": t, "name": names.get(t, str(t))} for t in sorted(hd.TESTERS) if t != hd.ADMIN]
+        out["crew_max"] = hd.CREW_MAX
     return out
 
 
@@ -178,19 +190,35 @@ async def a_menu(uid, a):
 
 
 async def a_assign(uid, a):
-    """Власник закріплює путівку за водієм (to = 0 — зняти)."""
-    what = str(a.get("id", ""))
+    """Власник складає екіпаж путівки: to — водій, on — додати чи зняти (to = 0 — зняти всіх).
+    У екіпажі один або двоє; рейс і каса в них спільні, а ящики автозвіт ділить навпіл."""
+    what, on = str(a.get("id", "")), a.get("on", True)
     try:
         to = int(a.get("to") or 0)
     except (TypeError, ValueError):
         to = -1
     if uid != hd.ADMIN or not what.startswith("1c:") or not re.fullmatch(r"[0-9a-f-]{36}", what[3:]):
         raise Bad("Закріплювати путівки може тільки власник")
-    if to and (to not in hd.TESTERS or to == hd.ADMIN):
-        raise Bad("Такої людини в списку рейсу немає")
-    if to and store.taken_by(what[3:], to):
-        raise Bad("Цю путівку вже відкрив інший водій")
-    store.assign(what[3:], to, uid)
+    ref = what[3:]
+    team = store.crew(ref)
+    if to and on is not False:                                    # додати в екіпаж
+        if to not in hd.TESTERS or to == hd.ADMIN:
+            raise Bad("Такої людини в списку рейсу немає")
+        if to not in team:
+            if len(team) >= hd.CREW_MAX:
+                raise Bad("В екіпажі вже двоє. Спершу зніми когось.")
+            if store.taken_by(ref, set(team) | {to} | hd.trial_ids()):
+                raise Bad("Цю путівку вже відкрив інший водій")
+            store.crew_add(ref, to, uid)
+    else:                                                         # зняти одного або всіх
+        gone = [to] if to else list(team)
+        rid, by, run = store.sheet_run(ref)
+        if rid and engine.has_marks(run) and set(gone) & set(team):
+            raise Bad("Рейс уже в роботі: у ньому є відмітки. Екіпаж зміниш після здачі каси.")
+        if rid and by in gone:
+            store.drop(rid)                                       # порожній рейс знятого водія більше нічий
+        for t in gone:
+            store.crew_del(ref, t)
     hd.act(uid, f"assign:{to}")
     return {"menu": await menu(uid)}
 
@@ -204,6 +232,12 @@ async def a_start(uid, a):
     elif what.startswith("1c:") and re.fullmatch(r"[0-9a-f-]{36}", what[3:]):
         if not hd.may_open(uid, what[3:]):                 # перевіряємо до 1С: чужу путівку навіть не читаємо
             raise Bad("Цю путівку за тобою не закріплено")
+        if not admin and store.sheet_run(what[3:])[0]:     # напарник уже відкрив — у 1С вдруге не ходимо
+            try:
+                if hd.guard_start(uid, {"sheet_ref": what[3:]}):
+                    return {}
+            except hd.Refused as e:
+                raise Bad(str(e)) from None
         run = await hd.load_run(what[3:])
     else:
         raise Bad("Не знаю такої путівки")
@@ -222,7 +256,8 @@ async def a_open(uid, a):
     st = _stop(run, a)
     if st["debts"] is None:
         await hd.load_debts(st)
-        store.save(run_id, run)
+        if st["debts"] is not None:
+            _put(run_id, run, a, "debts")
     return {}
 
 
@@ -296,8 +331,10 @@ async def a_items(uid, a):
     st = _stop(run, a)
     if not engine.riding(st):
         raise Bad("У цій точці сьогодні немає накладних")
+    fresh = st.get("items") is None
     items = await hd.load_items(st)
-    store.save(run_id, run)
+    if fresh:
+        _put(run_id, run, a, "items")
     return {"items": [{"ii": x[0], "li": x[1], "name": x[2], "qty": x[3], "price": x[4],
                        "no": st["inv"][x[0]]["no"], "mgr": engine.clean(st["inv"][x[0]].get("manager", ""))}
                       for x in items]}
@@ -379,27 +416,53 @@ async def a_close(uid, a, who=""):
     store.log(run_id, uid, "close", **{k: v for k, v in t.items() if k != "why"})
     store.close(run_id, run)
     await after_close(uid, run, who)
+    v = view.run_view(run)
     return {"done": {"hand": t["hand"], "cash": t["cash"], "spent": t["spent"], "unpaid": t["unpaid"],
-                     "title": view.run_view(run)["title"]}, "run": None}
+                     "title": v["title"], "crew": v["crew"]}, "run": None}
+
+
+async def mgr_preview(bot, uid, run, who):
+    """Звіт кожному менеджеру по його клієнтах. Менеджерам не шлемо, доки власник не скаже «запускай»."""
+    try:
+        from . import mgr_report
+        reps = mgr_report.build(run, view.run_view(run).get("title", ""), who)
+        if not reps or not hd.ADMIN:
+            return
+        hd.sent(await bot.send_message(hd.ADMIN, f"👁 <b>Приклад: так після рейсу отримають менеджери</b> · {len(reps)}",
+                                       parse_mode="HTML"))
+        for text in reps.values():
+            hd.sent(await bot.send_message(hd.ADMIN, text, parse_mode="HTML"))
+    except Exception as ex:
+        log.warning("reys: звіт менеджерам не зібрано: %s", ex)
+
+
+def team_of(uid, run):
+    """Хто їхав цим рейсом: екіпаж путівки, якщо той, хто здає касу, в ньому; інакше він сам."""
+    team = [] if run.get("demo") or run.get("snap") else store.crew(run.get("sheet_ref", ""))
+    return team if uid in team else [uid]
 
 
 async def after_close(uid, run, who):
-    """Чат чиститься: кнопку рейсу прибираємо. Підсумок іде касиру, а не водієві."""
+    """Чат чиститься: кнопку рейсу прибираємо в усього екіпажу. Підсумок іде касиру, а не водієві."""
     bot = STATE["bot"]
     if not bot:
         return
-    chat_id, msg_id = store.screen(uid)
-    if msg_id:
-        try:
-            await bot.delete_message(chat_id, msg_id)
-        except Exception as e:                      # повідомлення могли стерти руками — це не біда
-            log.info("reys: кнопку рейсу не прибрано: %s", e)
-        store.set_screen(uid, None, None)
+    team, names = team_of(uid, run), store.known_people()
+    for t in team:
+        chat_id, msg_id = store.screen(t)
+        if msg_id:
+            try:
+                await bot.delete_message(chat_id, msg_id)
+            except Exception as e:                      # повідомлення могли стерти руками — це не біда
+                log.info("reys: кнопку рейсу не прибрано: %s", e)
+            store.set_screen(t, None, None)
+    name = " + ".join(names.get(t) or (who if t == uid else str(t)) for t in team)
+    if not run.get("demo") or uid == hd.ADMIN:        # рішення власника 27.11: звіт менеджерам — поки приклад лише йому
+        await mgr_preview(bot, uid, run, name)
     if run.get("demo"):                              # навчальний рейс нікому не звітує
         return
     # Підсумок справжнього рейсу має хтось отримати. Касира не вписано — отримує власник.
     to = hd.ids_from_env("REYS_CASHIER") or ({hd.ADMIN} if hd.ADMIN else set())
-    name = store.known_people().get(uid) or who
     for cid in to - {uid}:
         try:
             await bot.send_message(cid, ui.report(run, name), parse_mode="HTML")
@@ -452,6 +515,8 @@ async def api(request: web.Request):
         out = await (fn(uid, args, name) if act == "close" else fn(uid, args))
     except Bad as e:
         out = {"ok": False, "msg": str(e)}
+    except store.Stale:                                    # напарник відмітив раніше — показуємо свіжий рейс
+        out = {"ok": False, "msg": "Напарник щойно щось відмітив. Глянь список і повтори."}
     except onec.OneCError as e:
         out = {"ok": False, "msg": f"1С: {e}"}
     except Exception:

@@ -134,8 +134,10 @@ def test_full_run_through_app():
             assert j["ok"] and j["run"] is None and j["done"]["hand"] == round(1501 + 2500 + 380 - 683.5, 2)
             sent = app.tg.session.sent[before:]
             assert any(isinstance(m, DeleteMessage) for m in sent)                    # чат чистий
-            report = [m for m in sent if isinstance(m, SendMessage)]
-            assert len(report) == 1 and report[0].chat_id == 777 and "здано" in report[0].text   # підсумок — касиру
+            report = [m for m in sent if isinstance(m, SendMessage) and m.chat_id == 777]
+            assert len(report) == 1 and "здано" in report[0].text                     # підсумок — касиру
+            prev = [m for m in sent if isinstance(m, SendMessage) and m.chat_id == ME]      # звіт менеджерам — приклад власникові
+            assert prev[0].text.startswith("👁") and len(prev) == 1 + int(prev[0].text.rsplit("· ", 1)[1]) >= 3
             assert store.open_run(ME) == (None, None) and store.screen(ME) == (None, None)
             assert (await app.call("state"))[1]["run"] is None
     asyncio.run(go())
@@ -481,13 +483,12 @@ def test_driver_opens_only_own_sheet():
             assert {p["id"] for p in m["people"]} == {333, 444}
             assert not (await app.call("assign", id="1c:" + SHEET, to=999))[1]["ok"]           # не з нашого списку
             m = (await app.call("assign", id="1c:" + SHEET, to=333))[1]["menu"]
-            assert m["sheets"][0]["to"] == 333 and m["sheets"][0]["who"] == "Тест"
+            assert m["sheets"][0]["crew"] == [333] and m["sheets"][0]["who"] == "Тест"
             j = (await app.call("state", who=333))[1]
             assert [s["id"] for s in j["menu"]["sheets"]] == ["1c:" + SHEET]                    # тепер бачить свою
             assert (await app.call("state", who=444))[1]["menu"]["sheets"] == []                # сусід — ні
             assert not (await app.call("start", who=444, id="1c:" + SHEET))[1]["ok"]
             assert (await app.call("start", who=333, id="1c:" + SHEET))[1]["run"]["totals"]["left"] == 5
-            assert not (await app.call("assign", id="1c:" + SHEET, to=444))[1]["ok"]           # уже в роботі — не перекинути
             assert (await app.call("start", id="1c:" + SHEET))[1]["ok"]                         # власник — будь-яку
     asyncio.run(go())
 
@@ -558,7 +559,11 @@ def test_closed_real_run_reaches_someone():
             before = len(app.tg.session.sent)
             assert (await app.call("close", who=333))[1]["ok"]
             got = [m for m in app.tg.session.sent[before:] if isinstance(m, SendMessage)]
-            assert [m.chat_id for m in got] == [ME] and "Водій Перший" in got[0].text and "здано" in got[0].text
+            assert {m.chat_id for m in got} == {ME}                            # і підсумок, і приклад звіту менеджерам — власникові
+            total = [m for m in got if "здано" in m.text]
+            assert len(total) == 1 and "Водій Перший" in total[0].text
+            mgr = [m for m in got if m.text.startswith("🚚")]
+            assert mgr and all("водій: Водій Перший" in m.text and "твої клієнти" in m.text for m in mgr)
             await app.call("start", who=333, id="demo")                        # навчальний — нікому
             for s in (await app.call("state", who=333))[1]["run"]["stops"]:
                 if s["where"] == "route":
@@ -629,7 +634,9 @@ def test_evening_regional_sheet_is_seen_next_morning():
                 tue = [s["Ref_Key"] for s in await handlers.list_sheets(dt.date(2026, 12, 1))]
                 assert tue == ["mon-eve"] and asked[-1][0] == "2026-11-30T14:00:00"            # учорашня денна вже не показується
                 run = {"sheet_ref": "mon-eve", "sheet_no": "5", "day": "2026-12-01", "stops": [], "expenses": []}
-                store.close(store.create(ME, run), run)                                          # касу здано — зникає
+                store.close(store.create(ME, dict(run)), run)                                    # пробний рейс власника путівку не ховає
+                assert [s["Ref_Key"] for s in await handlers.list_sheets(dt.date(2026, 12, 1))] == ["mon-eve"]
+                store.close(store.create(333, dict(run)), run)                                   # водій здав касу — зникає
                 assert await handlers.list_sheets(dt.date(2026, 12, 1)) == []
             finally:
                 handlers.read_sheets = old
@@ -674,3 +681,162 @@ def test_day_hours_come_from_the_bot_schedule():
     finally:
         sys.modules.pop("reys_hours", None)
         os.environ.pop("REYS_HOURS", None)
+
+
+# ---------- екіпаж (рішення власника 27.11: путівку везуть один або двоє, усе навпіл) ----------
+
+def runs_count(status="open"):
+    with store.db() as c:
+        return c.execute("SELECT COUNT(*) n FROM reys_runs WHERE status=?", (status,)).fetchone()["n"]
+
+
+def test_crew_of_two_shares_one_run_and_one_cash():
+    """Двоє в екіпажі бачать один рейс: відмітка одного видна другому, каса одна й не задвоюється."""
+    async def go():
+        async with Drivers() as app:
+            store.set_name(333, "Перший")
+            store.set_name(444, "Другий")
+            handlers.TESTERS.add(555)
+            m = (await app.call("assign", id="1c:" + SHEET, to=333))[1]["menu"]
+            m = (await app.call("assign", id="1c:" + SHEET, to=444))[1]["menu"]
+            assert m["sheets"][0]["crew"] == [333, 444] and m["sheets"][0]["who"] == "Перший + Другий" and m["crew_max"] == 2
+            j = (await app.call("assign", id="1c:" + SHEET, to=555))[1]                         # третій не влазить
+            assert not j["ok"] and "двоє" in j["msg"] and store.crew(SHEET) == [333, 444]
+            assert (await app.call("state", who=444))[1]["menu"]["sheets"][0]["mates"] == ["Перший"]
+            await app.call("start", who=444, id="demo")                                          # другий тим часом тренується
+            run = (await app.call("start", who=333, id="1c:" + SHEET))[1]["run"]
+            assert run["crew"] == ["Перший", "Другий"] and runs_count() == 2
+            j = (await app.call("start", who=444, id="1c:" + SHEET))[1]                         # заходить у рейс напарника
+            assert j["ok"] and not j["run"]["demo"] and runs_count() == 1                        # другого рейсу не створено
+            assert (await app.call("all", who=333, i=0))[1]["ok"]
+            j = (await app.call("state", who=444))[1]
+            assert j["run"]["totals"]["cash"] == 1501.0 and j["run"]["stops"][0]["status"]       # бачить відмітку напарника
+            j = (await app.call("all", who=444, i=0))[1]                                         # ту саму точку вдруге — ні
+            assert not j["ok"] and j["run"]["totals"]["cash"] == 1501.0
+            assert (await app.call("amount", who=444, i=1, sum=2500))[1]["ok"]
+            for who in (333, 444):
+                assert (await app.call("state", who=who))[1]["run"]["totals"]["cash"] == 4001.0  # каса одна, не задвоєна
+            for who in (333, 444):                                                               # рейс екіпажу не обійти
+                j = (await app.call("start", who=who, id="demo"))[1]
+                assert not j["ok"] and j["run"]["totals"]["cash"] == 4001.0
+            j = (await app.call("assign", id="1c:" + SHEET, to=444, on=False))[1]                # у роботі — екіпаж не міняємо
+            assert not j["ok"] and "відмітки" in j["msg"] and store.crew(SHEET) == [333, 444]
+            assert store.shares(handlers.today()) == {333: [(SHEET, 0.5, [444])], 444: [(SHEET, 0.5, [333])]}
+            # здає касу другий: рейс закрито в обох, кнопку рейсу прибрано в обох, у підсумку — обидва
+            for s in (await app.call("state", who=333))[1]["run"]["stops"]:
+                if s["where"] == "route" and not s["status"]:
+                    await app.call("all" if s["due"] > 0 else "given", who=333 if s["i"] % 2 else 444, i=s["i"])
+            store.set_screen(333, 333, 9001)
+            store.set_screen(444, 444, 9002)
+            before = len(app.tg.session.sent)
+            j = (await app.call("close", who=444))[1]
+            assert j["ok"] and j["done"]["crew"] == ["Перший", "Другий"]
+            sent = app.tg.session.sent[before:]
+            assert {m.message_id for m in sent if isinstance(m, DeleteMessage)} == {9001, 9002}
+            total = [m for m in sent if isinstance(m, SendMessage) and "здано" in m.text]
+            assert len(total) == 1 and total[0].chat_id == ME and "Перший + Другий" in total[0].text
+            j = (await app.call("state", who=333))[1]
+            assert j["run"] is None and runs_count("closed") == 1 and j["menu"]["sheets"] == []   # здана путівка зникає
+            for who in (333, 444):                                                               # і вдруге не відкривається
+                j = (await app.call("start", who=who, id="1c:" + SHEET))[1]
+                assert not j["ok"] and "вже здано" in j["msg"] and j["run"] is None
+            assert (await app.call("state"))[1]["menu"]["sheets"][0]["done"] is True             # власник бачить «касу здано»
+            handlers.TESTERS.discard(555)
+    asyncio.run(go())
+
+
+def test_two_at_once_do_not_erase_each_other():
+    """Поки один чекає на 1С, другий відмічає точку: відмітка не губиться. Стара копія рейсу поверх нової не лягає."""
+    async def go():
+        async with Drivers() as app:
+            for who in (333, 444):
+                await app.call("assign", id="1c:" + SHEET, to=who)
+            await app.call("start", who=333, id="1c:" + SHEET)
+            old = handlers.load_debts
+
+            async def slow(st):                                    # 1С думає, а напарник за цей час записує оплату
+                assert (await app.call("all", who=444, i=0))[1]["ok"]
+                st["debts"] = [{"ref": "x", "no": "9", "date": "2026-11-01", "sum": 50.0, "manager": ""}]
+            handlers.load_debts = slow
+            try:
+                rid, run = store.open_run(333)
+                run["stops"][2]["debts"] = None
+                store.save(rid, run)
+                assert (await app.call("open", who=333, i=2))[1]["ok"]
+            finally:
+                handlers.load_debts = old
+            rid, run = store.open_run(333)
+            assert run["stops"][0]["status"]["cash"] == 1501.0 and run["stops"][2]["debts"][0]["no"] == "9"
+            a, b = store.open_run(333)[1], store.open_run(444)[1]  # дві копії одного рейсу
+            a["expenses"].append({"kind": "Інше", "sum": 10, "ts": ""})
+            store.save(rid, a)
+            b["stops"][0]["status"] = None
+            try:
+                store.save(rid, b)
+                raise AssertionError("стара копія затерла нову")
+            except store.Stale:
+                pass
+            assert store.open_run(444)[1]["stops"][0]["status"]["cash"] == 1501.0
+    asyncio.run(go())
+
+
+def test_crew_rules_and_trial_runs():
+    """Один водій — уся путівка його; знятий з екіпажу путівки не бачить; пробний рейс власника нікому не заважає."""
+    async def go():
+        async with Drivers() as app:
+            await app.call("assign", id="1c:" + SHEET, to=333)
+            await app.call("start", who=333, id="1c:" + SHEET)
+            assert store.shares(handlers.today()) == {333: [(SHEET, 1.0, [])]}                   # сам — 100 %
+            assert (await app.call("state", who=333))[1]["run"]["crew"] == ["Тест"]
+            j = (await app.call("assign", id="1c:" + SHEET, to=333, on=False))[1]                # порожній рейс знятого водія зникає
+            assert j["ok"] and store.crew(SHEET) == [] and runs_count() == 0
+            assert (await app.call("state", who=333))[1]["run"] is None
+            assert not (await app.call("start", who=333, id="1c:" + SHEET))[1]["ok"]
+            await app.call("assign", id="1c:" + SHEET, to=333)
+            await app.call("assign", id="1c:" + SHEET, to=444)
+            assert (await app.call("assign", id="1c:" + SHEET, to=0))[1]["ok"] and store.crew(SHEET) == []   # зняти всіх
+            # власник проїхав путівку сам для проби й здав касу — водієві вона все одно відкривається
+            run = (await app.call("start", id="1c:" + OTHER))[1]["run"]
+            for s in run["stops"]:
+                if s["where"] == "route":
+                    await app.call("all" if s["due"] > 0 else "given", i=s["i"])
+            assert (await app.call("close"))[1]["ok"]
+            await app.call("assign", id="1c:" + OTHER, to=333)
+            assert (await app.call("start", who=333, id="1c:" + OTHER))[1]["ok"]
+            assert (await app.call("state", who=444))[1]["run"] is None                          # сторонній у рейс не потрапляє
+            os.environ["REYS_PREVIEW"] = "444"
+            try:
+                assert handlers.trial_ids() == {ME, 444}
+            finally:
+                os.environ.pop("REYS_PREVIEW")
+            # пробний рейс власника по путівці екіпажу водій не підхоплює
+            await app.call("assign", id="1c:" + SHEET, to=444)
+            await app.call("start", id="1c:" + SHEET)
+            assert (await app.call("state", who=444))[1]["run"] is None
+    asyncio.run(go())
+
+
+def test_manager_report_shows_each_manager_only_own_clients():
+    """Звіт менеджерам: суми менеджера — це оплати по його накладних; двоє на одній точці бачать кожен своє."""
+    import tempfile
+    from reys import build, engine, mgr_report
+    store.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
+    store.init()
+    run = build.demo_run(handlers.today())
+    st = run["stops"][3]                                                   # дві накладні, два менеджери
+    a, b = engine.riding(st)
+    assert engine.clean(a["manager"]) != engine.clean(b["manager"])
+    engine.pay(st, 1, [(a["ref"], a["sum"])])                              # оплатили тільки накладну першого
+    engine.pay_all(run["stops"][0], 1)
+    reps = mgr_report.build(run, "Суми · місто", "Перший + Другий")
+    first, second = reps[engine.clean(a["manager"])], reps[engine.clean(b["manager"])]
+    assert f"Забрано <b>{engine.money(a['sum'])}</b>" in first and "Не забрано" not in first
+    assert "✅ <b>Забрав гроші — 1</b>" in first and "водій: Перший + Другий" in first
+    assert "Забрано <b>" + engine.money(0) in second and f"Не забрано <b>{engine.money(b['sum'])}</b>" in second
+    assert engine.money(a["sum"]) not in second                             # чужих грошей не видно
+    for m, text in reps.items():                                            # сума зверху = оплати по накладних менеджера
+        refs = {i["ref"] for s in run["stops"] for i in s["inv"] if engine.clean(i.get("manager")) == m}
+        refs |= {d["ref"] for s in run["stops"] for d in engine.debts(s) if engine.clean(d.get("manager")) == m}
+        got = sum(x["paid"] for s in run["stops"] if s["status"] for x in s["status"]["alloc"] if x["ref"] in refs)
+        assert f"Забрано <b>{engine.money(round(got, 2))}</b>" in text
+    assert not mgr_report.build(build.demo_run(handlers.today()))           # без відміток — нема про що звітувати

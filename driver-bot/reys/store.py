@@ -4,6 +4,8 @@ import os
 import sqlite3
 from datetime import datetime
 
+from . import engine
+
 DB_PATH = os.environ.get("DB_PATH", "reports.db")   # справжній шлях передає setup()
 
 
@@ -25,12 +27,19 @@ def init():
         CREATE TABLE IF NOT EXISTS reys_phones(name TEXT PRIMARY KEY, phone TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reys_dirs(name TEXT PRIMARY KEY, dir TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reys_assign(sheet_ref TEXT PRIMARY KEY, tg_id INTEGER NOT NULL, by_id INTEGER, ts TEXT);
+        CREATE TABLE IF NOT EXISTS reys_crew(sheet_ref TEXT NOT NULL, tg_id INTEGER NOT NULL, by_id INTEGER, ts TEXT,
+            PRIMARY KEY(sheet_ref, tg_id));
         CREATE TABLE IF NOT EXISTS reys_people(tg_id INTEGER PRIMARY KEY, name TEXT, seen TEXT);
         CREATE TABLE IF NOT EXISTS reys_titles(sheet_ref TEXT PRIMARY KEY, title TEXT, points INTEGER, ts TEXT);
         CREATE TABLE IF NOT EXISTS reys_screen(tg_id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER);
         """)
+        if "ver" not in {r["name"] for r in c.execute("PRAGMA table_info(reys_runs)")}:
+            c.execute("ALTER TABLE reys_runs ADD COLUMN ver INTEGER DEFAULT 0")
         if "fixed" not in {r["name"] for r in c.execute("PRAGMA table_info(reys_people)")}:
             c.execute("ALTER TABLE reys_people ADD COLUMN fixed INTEGER DEFAULT 0")
+        # було «одна путівка — один водій»; тепер екіпаж з одного-двох. Старі закріплення переносимо один раз.
+        c.execute("INSERT OR IGNORE INTO reys_crew(sheet_ref, tg_id, by_id, ts) SELECT sheet_ref, tg_id, by_id, ts FROM reys_assign")
+        c.execute("DELETE FROM reys_assign")
         _rekey(c, "reys_phones", "phone")
         _rekey(c, "reys_dirs", "dir")
 
@@ -55,30 +64,108 @@ def now():
     return datetime.now().isoformat(timespec="seconds")
 
 
-def open_run(tg_id):
+class Stale(Exception):
+    """Рейс змінили, поки ми тримали стару копію (напарник відмітив точку). Запис відхилено, щоб не затерти його відмітку."""
+
+
+def _load(r):
+    """Рейс із рядка бази. Номер версії їде разом з рейсом — за ним save() бачить, що копія застаріла."""
+    run = json.loads(r["data"])
+    run["_ver"] = r["ver"] or 0
+    return run
+
+
+def _dump(run):
+    return json.dumps({k: v for k, v in run.items() if k != "_ver"}, ensure_ascii=False)
+
+
+def get(run_id):
+    """Свіжа копія відкритого рейсу за номером."""
     with db() as c:
-        r = c.execute("SELECT id, data FROM reys_runs WHERE tg_id=? AND status='open' ORDER BY id DESC LIMIT 1",
-                      (tg_id,)).fetchone()
-    return (r["id"], json.loads(r["data"])) if r else (None, None)
+        r = c.execute("SELECT data, ver FROM reys_runs WHERE id=? AND status='open'", (run_id,)).fetchone()
+    return _load(r) if r else None
+
+
+def open_run(tg_id):
+    """Рейс, у якому людина зараз працює. Екіпаж їде одним рейсом: його відкрив один, а бачать і відмічають обидва.
+    Свій рейс із відмітками важливіший (у ньому гроші, які ще не здано), далі свій справжній,
+    далі рейс, який відкрив напарник, або свій навчальний — той, що відкрито пізніше."""
+    with db() as c:
+        rows = c.execute(
+            "SELECT id, tg_id, sheet_ref, data, ver FROM reys_runs WHERE status='open' AND (tg_id=?1 OR sheet_ref IN "
+            "(SELECT sheet_ref FROM reys_crew WHERE tg_id=?1)) ORDER BY id DESC", (tg_id,)).fetchall()
+        mates = {r["sheet_ref"]: {x["tg_id"] for x in c.execute(
+            "SELECT tg_id FROM reys_crew WHERE sheet_ref=?", (r["sheet_ref"],))} for r in rows if r["tg_id"] != tg_id}
+    own = [r for r in rows if r["tg_id"] == tg_id]
+    # чужий рейс — тільки якщо його відкрив напарник з того самого екіпажу (пробний рейс власника сюди не потрапляє)
+    shared = [r for r in rows if r["tg_id"] != tg_id and r["tg_id"] in mates[r["sheet_ref"]]]
+    mine = [(r["id"], _load(r)) for r in own]
+    idle = lambda run: bool(run.get("demo") or run.get("snap"))          # noqa: E731
+    rest = sorted([(r["id"], _load(r)) for r in shared] + [x for x in mine if idle(x[1])], key=lambda x: -x[0])
+    for pick in ([x for x in mine if engine.has_marks(x[1])], [x for x in mine if not idle(x[1])], rest):
+        if pick:
+            return pick[0]                                   # серед рейсу напарника і свого навчального — той, що новіший
+    return None, None
+
+
+def owner(run_id):
+    """Хто відкрив рейс."""
+    with db() as c:
+        r = c.execute("SELECT tg_id FROM reys_runs WHERE id=?", (run_id,)).fetchone()
+    return r["tg_id"] if r else None
+
+
+def sheet_run(sheet_ref):
+    """Відкритий рейс екіпажу по цій путівці: (номер, хто відкрив, рейс) або (None, None, None)."""
+    with db() as c:
+        r = c.execute("SELECT id, tg_id, data, ver FROM reys_runs WHERE sheet_ref=? AND status='open' AND tg_id IN "
+                      "(SELECT tg_id FROM reys_crew WHERE sheet_ref=?) ORDER BY id DESC LIMIT 1",
+                      (sheet_ref, sheet_ref)).fetchone()
+    return (r["id"], r["tg_id"], _load(r)) if r else (None, None, None)
+
+
+def drop_idle(tg_id):
+    """Прибирає власні відкриті рейси без відміток (навчальний, щойно відкритий) — коли людина заходить у рейс екіпажу."""
+    with db() as c:
+        rows = c.execute("SELECT id, data, ver FROM reys_runs WHERE tg_id=? AND status='open'", (tg_id,)).fetchall()
+    for r in rows:
+        if not engine.has_marks(_load(r)):
+            drop(r["id"])
+
+
+def drop(run_id):
+    """Покинутий рейс: у списках його більше немає, у журналі лишається."""
+    with db() as c:
+        c.execute("UPDATE reys_runs SET status='dropped', closed_at=? WHERE id=? AND status='open'", (now(), run_id))
 
 
 def create(tg_id, run):
     with db() as c:
         c.execute("UPDATE reys_runs SET status='dropped', closed_at=? WHERE tg_id=? AND status='open'", (now(), tg_id))
         cur = c.execute("INSERT INTO reys_runs(tg_id, sheet_ref, day, data, created_at) VALUES(?,?,?,?,?)",
-                        (tg_id, run["sheet_ref"], run["day"], json.dumps(run, ensure_ascii=False), now()))
+                        (tg_id, run["sheet_ref"], run["day"], _dump(run), now()))
+        run["_ver"] = 0
         return cur.lastrowid
 
 
 def save(run_id, run):
+    """Записує рейс. Якщо його тим часом змінив напарник — Stale: відмітку не затираємо, людина повторить."""
+    ver = run.get("_ver", 0)
     with db() as c:
-        c.execute("UPDATE reys_runs SET data=? WHERE id=?", (json.dumps(run, ensure_ascii=False), run_id))
+        cur = c.execute("UPDATE reys_runs SET data=?, ver=? WHERE id=? AND status='open' AND COALESCE(ver, 0)=?",
+                        (_dump(run), ver + 1, run_id, ver))
+    if not cur.rowcount:
+        raise Stale(run_id)
+    run["_ver"] = ver + 1
 
 
 def close(run_id, run):
+    ver = run.get("_ver", 0)
     with db() as c:
-        c.execute("UPDATE reys_runs SET status='closed', closed_at=?, data=? WHERE id=?",
-                  (now(), json.dumps(run, ensure_ascii=False), run_id))
+        cur = c.execute("UPDATE reys_runs SET status='closed', closed_at=?, data=?, ver=? WHERE id=? AND status='open' "
+                        "AND COALESCE(ver, 0)=?", (now(), _dump(run), ver + 1, run_id, ver))
+    if not cur.rowcount:
+        raise Stale(run_id)
 
 
 def log(run_id, tg_id, action, **payload):
@@ -146,34 +233,61 @@ def people():
 # ---------- чия путівка ----------
 # У 1С у путівці немає ні водія, ні маршруту, тому «чия вона» знає тільки той, хто її роздає.
 
-def assign(sheet_ref, tg_id, by_id):
-    """Закріплює путівку за водієм. tg_id = 0 — зняти."""
+def crew_add(sheet_ref, tg_id, by_id):
     with db() as c:
-        if tg_id:
-            c.execute("INSERT INTO reys_assign(sheet_ref, tg_id, by_id, ts) VALUES(?,?,?,?) ON CONFLICT(sheet_ref) "
-                      "DO UPDATE SET tg_id=excluded.tg_id, by_id=excluded.by_id, ts=excluded.ts",
-                      (sheet_ref, int(tg_id), by_id, now()))
+        c.execute("INSERT OR IGNORE INTO reys_crew(sheet_ref, tg_id, by_id, ts) VALUES(?,?,?,?)",
+                  (sheet_ref, int(tg_id), by_id, now()))
+
+
+def crew_del(sheet_ref, tg_id=None):
+    """Знімає людину з путівки (без tg_id — увесь екіпаж)."""
+    with db() as c:
+        if tg_id is None:
+            c.execute("DELETE FROM reys_crew WHERE sheet_ref=?", (sheet_ref,))
         else:
-            c.execute("DELETE FROM reys_assign WHERE sheet_ref=?", (sheet_ref,))
+            c.execute("DELETE FROM reys_crew WHERE sheet_ref=? AND tg_id=?", (sheet_ref, int(tg_id)))
 
 
-def assigned(sheet_ref):
+def crew(sheet_ref):
+    """Екіпаж путівки в порядку закріплення."""
     with db() as c:
-        r = c.execute("SELECT tg_id FROM reys_assign WHERE sheet_ref=?", (sheet_ref,)).fetchone()
-    return r["tg_id"] if r else None
+        return [r["tg_id"] for r in c.execute("SELECT tg_id FROM reys_crew WHERE sheet_ref=? ORDER BY ts, rowid",
+                                              (sheet_ref,))]
 
 
-def assignments():
+def crews():
+    out = {}
     with db() as c:
-        return {r["sheet_ref"]: r["tg_id"] for r in c.execute("SELECT sheet_ref, tg_id FROM reys_assign")}
+        for r in c.execute("SELECT sheet_ref, tg_id FROM reys_crew ORDER BY ts, rowid"):
+            out.setdefault(r["sheet_ref"], []).append(r["tg_id"])
+    return out
 
 
-def taken_by(sheet_ref, not_uid):
-    """Хто інший уже відкрив або здав цю путівку (покинуті рейси не рахуються)."""
+def taken_by(sheet_ref, ok_ids):
+    """Хто сторонній уже відкрив або здав цю путівку (покинуті рейси не рахуються).
+    ok_ids — кого не рахуємо: сам екіпаж і пробні рейси власника."""
     with db() as c:
-        r = c.execute("SELECT tg_id FROM reys_runs WHERE sheet_ref=? AND tg_id<>? AND status IN ('open','closed') "
-                      "ORDER BY id DESC LIMIT 1", (sheet_ref, not_uid)).fetchone()
-    return r["tg_id"] if r else None
+        for r in c.execute("SELECT tg_id FROM reys_runs WHERE sheet_ref=? AND status IN ('open','closed') "
+                           "ORDER BY id DESC", (sheet_ref,)):
+            if r["tg_id"] not in ok_ids:
+                return r["tg_id"]
+    return None
+
+
+def shares(day):
+    """Хто з ким їхав цього дня: {tg_id: [(путівка, частка, [напарники])]}. Частка 1.0 — сам, 0.5 — удвох.
+    Рахуємо по рейсах дня (відкритих і зданих), а не по закріпленнях: закріпити можна й те, що не поїхало."""
+    out = {}
+    with db() as c:
+        refs = [r["sheet_ref"] for r in c.execute(
+            "SELECT DISTINCT sheet_ref FROM reys_runs WHERE day=? AND status IN ('open','closed') AND sheet_ref IN "
+            "(SELECT sheet_ref FROM reys_crew) AND tg_id IN (SELECT tg_id FROM reys_crew WHERE sheet_ref=reys_runs.sheet_ref)",
+            (str(day),))]
+    for ref in refs:
+        team = crew(ref)
+        for t in team:
+            out.setdefault(t, []).append((ref, round(1 / len(team), 2), [x for x in team if x != t]))
+    return out
 
 
 def saw(tg_id, name):
@@ -214,7 +328,8 @@ def set_title(sheet_ref, name, points):
                   (sheet_ref, name, int(points), now()))
 
 
-def closed_refs():
-    """Путівки, по яких касу вже здано."""
+def closed_refs(ignore=()):
+    """Путівки, по яких касу вже здано. ignore — чиї рейси не рахуємо (пробні рейси власника)."""
     with db() as c:
-        return {r["sheet_ref"] for r in c.execute("SELECT DISTINCT sheet_ref FROM reys_runs WHERE status='closed'")}
+        return {r["sheet_ref"] for r in c.execute("SELECT sheet_ref, tg_id FROM reys_runs WHERE status='closed'")
+                if r["tg_id"] not in ignore}

@@ -92,6 +92,7 @@ input.sum:focus{outline:none;border-color:var(--accent)}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
 .chip{padding:12px 16px;border-radius:999px;border:2px solid var(--line);background:var(--surface);font:inherit;font-weight:700;color:var(--ink)}
 .chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.chip.dim{opacity:.45}
 .x{border:0;background:none;font-size:20px;color:var(--debt);padding:4px 8px}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(100px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:14px 16px;border-radius:14px;font-weight:700;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s;z-index:9}
 .toast.on{opacity:1}
@@ -179,9 +180,15 @@ function vMenu(){
   if (m.sheets.length) h += `<div class="muted">Яку путівку відкрити?</div>`;
   else if (!m.note) h += `<div class="card">Путівок на сьогодні ще немає.</div>`;
   m.sheets.forEach(s => {
-    h += `<button class="btn left" data-a="start" data-id="${esc(s.id)}"><span><b>📄 ${esc(s.title)}</b>${s.sub ? `<br><span class="small muted" style="font-weight:500">${esc(s.sub)}</span>` : ""}</span><span>›</span></button>`;
-    if (m.people && s.id.startsWith("1c:"))        // власник закріплює путівку за водієм
-      h += `<div class="chips" style="margin:-2px 0 12px"><span class="small muted" style="align-self:center">Чия:</span>${m.people.length ? m.people.map(p => `<button class="chip${s.to === p.id ? " on" : ""}" data-a="assign" data-id="${esc(s.id)}" data-to="${s.to === p.id ? 0 : p.id}">👤 ${esc(p.name)}</button>`).join("") : `<span class="small muted" style="align-self:center">водіїв у рейсі ще немає</span>`}</div>`;
+    const mates = !m.people && s.mates && s.mates.length ? `<br><span class="small muted" style="font-weight:500">👥 удвох з ${esc(s.mates.join(", "))} · усе навпіл</span>` : "";
+    h += `<button class="btn left" data-a="start" data-id="${esc(s.id)}"><span><b>${s.done ? "🏁" : "📄"} ${esc(s.title)}</b>${s.done ? ` <span class="small muted">касу здано</span>` : ""}${s.sub ? `<br><span class="small muted" style="font-weight:500">${esc(s.sub)}</span>` : ""}${mates}</span><span>›</span></button>`;
+    if (m.people && s.id.startsWith("1c:")) {      // власник складає екіпаж: один або двоє водіїв
+      const crew = s.crew || [], full = crew.length >= (m.crew_max || 2);
+      h += `<div class="chips" style="margin:-2px 0 12px"><span class="small muted" style="align-self:center">Екіпаж:</span>${m.people.length ? m.people.map(p => {
+        const on = crew.includes(p.id);
+        return `<button class="chip${on ? " on" : ""}${!on && full ? " dim" : ""}" data-a="assign" data-id="${esc(s.id)}" data-to="${p.id}" data-on="${on ? 0 : 1}">👤 ${esc(p.name)}</button>`;
+      }).join("") : `<span class="small muted" style="align-self:center">водіїв у рейсі ще немає</span>`}${crew.length > 1 ? `<span class="small muted" style="align-self:center">· усе навпіл</span>` : ""}</div>`;
+    }
   });
   h += `<button class="btn left" data-a="start" data-id="demo"><span>🎓 Навчальний рейс</span><span>›</span></button>`;
   return [h, S.run ? [["back", "← Назад", "list"]] : []];
@@ -212,6 +219,7 @@ function vList(){
   const debt = st.filter(s => s.where === "debt" && !s.status).sort((a, b) => b.debt - a.debt), skip = st.filter(s => s.where === "skip");
   const pct = t.stops ? Math.round(100 * (t.stops - todo.length) / t.stops) : 100;
   let h = `<div class="top"><h1>${esc(r.title)}</h1><button class="icon" data-a="menu">⋯</button></div>
+  ${r.crew && r.crew.length > 1 ? `<div class="small muted" style="margin:-6px 0 10px">👥 ${esc(r.crew.join(" + "))} · рейс і каса спільні, усе навпіл</div>` : ""}
   <div class="card"><div class="count">${todo.length ? `Лишилось ${todo.length} з ${t.stops}` : "Усі точки відмічено"}</div>
     <div class="track"><i></i><u style="width:${pct}%"></u><s style="left:${Math.min(96, Math.max(4, pct))}%">🚚</s><em>🏁</em></div></div>
   <div class="two"><div class="card"><div class="small muted">💰 Ще зібрати</div><div class="v">${money(r.left_sum)}</div></div>
@@ -360,7 +368,7 @@ function vClose(){
 }
 function vDone(){
   const d = S.done;
-  return [`<div class="center"><div style="font-size:64px">🏁</div><div class="count">Касу здано</div><div class="big">${money(d.hand)}</div><div class="muted">${esc(d.title)}</div></div>`, [["go", "Готово", "exit"]]];
+  return [`<div class="center"><div style="font-size:64px">🏁</div><div class="count">Касу здано</div><div class="big">${money(d.hand)}</div><div class="muted">${esc(d.title)}</div>${d.crew && d.crew.length > 1 ? `<div class="muted">👥 ${esc(d.crew.join(" + "))} · усе навпіл</div>` : ""}</div>`, [["go", "Готово", "exit"]]];
 }
 function vShut(){ return [`<div class="center"><div style="font-size:56px">🌙</div><p class="count">${esc(S.shut)}</p></div>`, []]; }
 const V = {shut:vShut, menu:vMenu, list:vList, card:vCard, pick:vPick, reasons:vReasons, block:vBlock, problem:vProblem, items:vItems, qty:vQty, expense:vExpense, close:vClose, done:vDone};
@@ -396,7 +404,7 @@ const A = {
   close: () => go("close"),
   menu: async () => { if (await api("menu")) go("menu"); },
   start: async d => { if (await api("start", {id:d.id, force:!!S.run})) { S.open = {}; go("list"); } },
-  assign: async d => { await api("assign", {id:d.id, to:+d.to}); render(true); },
+  assign: async d => { await api("assign", {id:d.id, to:+d.to, on:d.on === "1"}); render(true); },
   fold: d => { S.open[d.k] = !S.open[d.k]; render(true); },
   open: async d => { S.i = +d.i; S.sel = []; S.sum = ""; const st = stop(); if (st.where !== "skip") { await api("open", {i:S.i}); go("card"); } },
   who: d => { $("sheet").innerHTML = whoSheet(S.run.stops[+d.i]); },
@@ -458,6 +466,18 @@ document.addEventListener("input", ev => { if (ev.target.id === "sum") { S.sum =
   if (S.scr === "shut") return;
   if (!j && !S.run && !S.menu) { $("main").innerHTML = `<div class="center"><div style="font-size:48px">🔒</div><p><b>Рейс відкривається кнопкою в боті.</b></p></div>`; return; }
   go(S.run ? "list" : "menu");
+  // Екіпаж із двох: список сам підтягує відмітки напарника, поки ти на нього дивишся
+  setInterval(async () => {
+    if (busy || document.hidden || S.scr !== "list" || !S.run || !(S.run.crew && S.run.crew.length > 1)) return;
+    const ver = S.run.ver, was = !!S.run;
+    try {
+      const r = await fetch("api", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({init:INIT, act:"state", args:{}})});
+      const j = await r.json();
+      if (busy || S.scr !== "list" || !j.ok) return;
+      if (!j.run) { S.run = null; if (j.menu) S.menu = j.menu; toast("Напарник здав касу"); return go("menu"); }
+      if (j.run.ver !== ver) { S.run = j.run; render(true); }
+    } catch(e){}
+  }, 25000);
 })();
 </script>
 </body>

@@ -3,4 +3,4 @@
 Підключення до наявного бота — див. ВСТАНОВЛЕННЯ.md. Модуль бачать лише
 тестувальники зі списку REYS_TESTERS, для решти водіїв нічого не змінюється.
 """
-from .handlers import router, setup  # noqa: F401
+from .handlers import router, setup, shares  # noqa: F401
