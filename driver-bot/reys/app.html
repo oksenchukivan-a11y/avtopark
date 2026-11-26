@@ -172,10 +172,17 @@ function whoSheet(st){
 function vMenu(){
   const m = S.menu || {sheets:[]};
   let h = `<div class="top"><h1>🚚 Рейс</h1></div>`;
+  if (m.locked)          // у рейсі вже є гроші чи відмітки — його не можна загубити
+    return [h + `<div class="card debt"><b>У тебе відкритий рейс з відмітками.</b><div>Спершу здай у ньому касу.</div></div>`, [["back wide", "← До рейсу", "list"]]];
   if (S.run) h += `<div class="card debt">Відкритий рейс закриється, відмітки в ньому не збережуться.</div>`;
   if (m.note) h += `<div class="card">${esc(m.note)}</div>`;
-  h += m.sheets.length ? `<div class="muted">Яку путівку відкрити?</div>` : `<div class="card">Путівок на сьогодні ще немає.</div>`;
-  m.sheets.forEach(s => h += `<button class="btn left" data-a="start" data-id="${esc(s.id)}"><span>📄 ${esc(s.title)}</span><span>›</span></button>`);
+  if (m.sheets.length) h += `<div class="muted">Яку путівку відкрити?</div>`;
+  else if (!m.note) h += `<div class="card">Путівок на сьогодні ще немає.</div>`;
+  m.sheets.forEach(s => {
+    h += `<button class="btn left" data-a="start" data-id="${esc(s.id)}"><span>📄 ${esc(s.title)}</span><span>›</span></button>`;
+    if (m.people && s.id.startsWith("1c:"))        // власник закріплює путівку за водієм
+      h += `<div class="chips" style="margin:-2px 0 12px"><span class="small muted" style="align-self:center">Чия:</span>${m.people.length ? m.people.map(p => `<button class="chip${s.to === p.id ? " on" : ""}" data-a="assign" data-id="${esc(s.id)}" data-to="${s.to === p.id ? 0 : p.id}">👤 ${esc(p.name)}</button>`).join("") : `<span class="small muted" style="align-self:center">водіїв у рейсі ще немає</span>`}</div>`;
+  });
   h += `<button class="btn left" data-a="start" data-id="demo"><span>🎓 Навчальний рейс</span><span>›</span></button>`;
   return [h, S.run ? [["back", "← Назад", "list"]] : []];
 }
@@ -386,7 +393,8 @@ const A = {
   expense: () => { S.sum = ""; go("expense"); },
   close: () => go("close"),
   menu: async () => { if (await api("menu")) go("menu"); },
-  start: async d => { if (await api("start", {id:d.id})) { S.open = {}; go("list"); } },
+  start: async d => { if (await api("start", {id:d.id, force:!!S.run})) { S.open = {}; go("list"); } },
+  assign: async d => { await api("assign", {id:d.id, to:+d.to}); render(true); },
   fold: d => { S.open[d.k] = !S.open[d.k]; render(true); },
   open: async d => { S.i = +d.i; S.sel = []; S.sum = ""; const st = stop(); if (st.where !== "skip") { await api("open", {i:S.i}); go("card"); } },
   who: d => { $("sheet").innerHTML = whoSheet(S.run.stops[+d.i]); },

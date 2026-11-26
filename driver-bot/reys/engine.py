@@ -190,3 +190,8 @@ def managers(st):
 def debt_managers(st):
     """Кому дзвонити через борг: менеджери неоплачених накладних; якщо невідомо — усі менеджери точки."""
     return _uniq(d.get("manager", "") for d in debts(st)) or managers(st)
+
+
+def has_marks(run) -> bool:
+    """У рейсі вже щось записано: відмітка на точці, проблема з товаром або витрата. Такий рейс не можна загубити."""
+    return bool(run.get("expenses")) or any(s["status"] or s["probs"] for s in run["stops"])

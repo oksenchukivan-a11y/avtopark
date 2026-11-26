@@ -289,6 +289,9 @@ async def scenario_guards():
         ("expense", {"sum": "abc"}, "витрата літерами"),
         ("expense_del", {"k": 5}, "видалити неіснуючу витрату"),
         ("start", {"id": "../../etc/passwd"}, "дивна путівка"),
+        ("start", {"id": "1c:11111111-2222-3333-4444-555555555555"}, "чужа путівка за кодом"),
+        ("start", {"id": "sn:2026-11-25_1301_8389"}, "знімок не власником"),
+        ("assign", {"id": "1c:11111111-2222-3333-4444-555555555555", "to": UID}, "закріпити путівку не власником"),
     ]
     await call("items", i=k)
     for act, a, what in must_refuse:
@@ -303,6 +306,13 @@ async def scenario_guards():
     r2 = await call("all", i=k)
     if r1[0] == "ok" and r2[0] == "ok":
         finding("захист", "подвійне натискання", "«Забрав усе» двічі по одній точці — обидва пройшли", [])
+    # рейс з грошима не можна загубити, відкривши інший
+    cash = engine.totals(run_now())["cash"]
+    for force in (False, True):
+        r = await call("start", id="demo", force=force)
+        now = run_now()
+        if r[0] == "ok" or not now or abs(engine.totals(now)["cash"] - cash) > 0.005:
+            finding("захист", "рейс з відмітками", f"новий рейс (force={force}) скинув відкритий з грошима {cash}")
 
 
 # ---------------- 4. хаотичний водій ----------------

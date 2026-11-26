@@ -25,7 +25,7 @@ PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.html")
 
 
 HITS: dict = {}              # хто скільки запитів зробив за останню хвилину
-RATE = 90                    # запитів на людину за хвилину; рейс стільки не потребує
+RATE = 40                    # запитів на людину за хвилину: на точку йде 2–6 запитів, швидше ніж точка за 10 с не буває
 
 
 def hours(uid=None):
@@ -131,41 +131,79 @@ def _money(v):
     return v
 
 
-async def menu(day=None):
-    """Що можна відкрити: путівки з 1С за день, знімки, демо."""
+async def menu(uid, day=None):
+    """Що ця людина може відкрити. Власник бачить усі путівки дня і закріплює їх за водіями;
+    водій — тільки закріплені за ним. Знімки — лише власникові, навчальний рейс — усім."""
     day = day or hd.today()
+    admin = uid == hd.ADMIN
     sheets, note = [], ""
+    names, own = store.known_people(), store.assignments()
     if onec.configured():
         try:
-            sheets = [{"id": "1c:" + s["Ref_Key"], "title": f"Путівка {s['Date'][11:16]} · № {s['Number'].lstrip('0')}"}
-                      for s in await hd.list_sheets(day)]
+            for s in await hd.list_sheets(day):
+                ref = s["Ref_Key"]
+                if admin or own.get(ref) == uid:
+                    row = {"id": "1c:" + ref, "title": f"Путівка {s['Date'][11:16]} · № {s['Number'].lstrip('0')}"}
+                    if admin:
+                        row.update(to=own.get(ref) or 0, who=names.get(own.get(ref), "") if own.get(ref) else "")
+                    sheets.append(row)
             if not sheets:
-                note = f"За {day:%d.%m} путівок у 1С ще немає."
+                note = f"За {day:%d.%m} путівок у 1С ще немає." if admin else "Путівку за тобою ще не закріплено."
         except onec.OneCError as e:
             note = f"1С не відповідає: {e}"
-    sheets += [{"id": "sn:" + stem, "title": title} for stem, title in hd.snapshots()]
-    return {"sheets": sheets, "note": note}
+    if admin:
+        sheets += [{"id": "sn:" + stem, "title": title} for stem, title in hd.snapshots()]
+    run_id, run = store.open_run(uid)
+    out = {"sheets": sheets, "note": note, "locked": bool(run and engine.has_marks(run) and not admin)}
+    if admin:
+        out["people"] = [{"id": t, "name": names.get(t, str(t))} for t in sorted(hd.TESTERS) if t != hd.ADMIN]
+    return out
 
 
 async def a_state(uid, a):
     run_id, run = store.open_run(uid)
-    return {} if run else {"menu": await menu()}
+    return {} if run else {"menu": await menu(uid)}
 
 
 async def a_menu(uid, a):
-    return {"menu": await menu()}
+    return {"menu": await menu(uid)}
+
+
+async def a_assign(uid, a):
+    """Власник закріплює путівку за водієм (to = 0 — зняти)."""
+    what = str(a.get("id", ""))
+    try:
+        to = int(a.get("to") or 0)
+    except (TypeError, ValueError):
+        to = -1
+    if uid != hd.ADMIN or not what.startswith("1c:") or not re.fullmatch(r"[0-9a-f-]{36}", what[3:]):
+        raise Bad("Закріплювати путівки може тільки власник")
+    if to and (to not in hd.TESTERS or to == hd.ADMIN):
+        raise Bad("Такої людини в списку рейсу немає")
+    if to and store.taken_by(what[3:], to):
+        raise Bad("Цю путівку вже відкрив інший водій")
+    store.assign(what[3:], to, uid)
+    hd.act(uid, f"assign:{to}")
+    return {"menu": await menu(uid)}
 
 
 async def a_start(uid, a):
-    what = str(a.get("id", ""))
+    what, admin = str(a.get("id", "")), uid == hd.ADMIN
     if what == "demo":
         run = build.demo_run(hd.today())
-    elif what.startswith("sn:"):
+    elif what.startswith("sn:") and admin:
         run = hd.load_snapshot(what[3:])
     elif what.startswith("1c:") and re.fullmatch(r"[0-9a-f-]{36}", what[3:]):
+        if not hd.may_open(uid, what[3:]):                 # перевіряємо до 1С: чужу путівку навіть не читаємо
+            raise Bad("Цю путівку за тобою не закріплено")
         run = await hd.load_run(what[3:])
     else:
         raise Bad("Не знаю такої путівки")
+    try:
+        if hd.guard_start(uid, run, force=a.get("force") is True):
+            return {}                                       # цей рейс уже відкрито — нічого не скидаємо
+    except hd.Refused as e:
+        raise Bad(str(e)) from None
     run_id = store.create(uid, run)
     store.log(run_id, uid, "start", sheet=run["sheet_no"], stops=len(engine.route(run)), via="app")
     return {}
@@ -356,7 +394,7 @@ async def after_close(uid, run, who):
             log.warning("reys: підсумок касиру %s не надіслано: %s", cid, e)
 
 
-ACTIONS = {"state": a_state, "menu": a_menu, "start": a_start, "open": a_open,
+ACTIONS = {"state": a_state, "menu": a_menu, "start": a_start, "assign": a_assign, "open": a_open,
            "all": _quick(engine.pay_all, "all"), "today": _quick(engine.pay_today, "tod"),
            "given": _quick(engine.mark_given, "gv"), "pick": a_pick, "amount": a_amount, "none": a_none,
            "fix": a_fix, "items": a_items, "problem": a_problem, "other": a_other, "expense": a_expense,
@@ -379,13 +417,18 @@ async def api(request: web.Request):
         return _json({"ok": False, "msg": "Запит не розібрано"}, 400)
     who = check_init(init, STATE["secret"])
     if not who:
+        hd.act(0, "401")                                   # без підпису — теж видно сторожу бота
         return _json({"ok": False, "msg": "Відкрий рейс кнопкою в боті"}, 401)
     uid, name = who
     if uid not in hd.TESTERS:
+        hd.act(uid, "403")
         return _json({"ok": False, "msg": "Рейс для тебе ще не ввімкнено"}, 403)
     if too_fast(uid):
         log.warning("reys: забагато запитів від %s", uid)
+        hd.act(uid, "429")
         return _json({"ok": False, "msg": "Забагато запитів. Зачекай хвилину."}, 429)
+    hd.act(uid, f"app:{act}")
+    store.saw(uid, name)
     if not working(uid):
         a, b = hours(uid)
         return _json({"ok": False, "shut": True, "msg": f"Бот працює з {a}:00 до {b}:00"})

@@ -24,6 +24,8 @@ def init():
             action TEXT, payload TEXT);
         CREATE TABLE IF NOT EXISTS reys_phones(name TEXT PRIMARY KEY, phone TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reys_dirs(name TEXT PRIMARY KEY, dir TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS reys_assign(sheet_ref TEXT PRIMARY KEY, tg_id INTEGER NOT NULL, by_id INTEGER, ts TEXT);
+        CREATE TABLE IF NOT EXISTS reys_people(tg_id INTEGER PRIMARY KEY, name TEXT, seen TEXT);
         CREATE TABLE IF NOT EXISTS reys_screen(tg_id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER);
         """)
         _rekey(c, "reys_phones", "phone")
@@ -136,3 +138,48 @@ def people():
         for r in c.execute("SELECT name, dir FROM reys_dirs"):
             out[r["name"]] = (out.get(r["name"], ("", ""))[0], r["dir"])
     return out
+
+
+# ---------- чия путівка ----------
+# У 1С у путівці немає ні водія, ні маршруту, тому «чия вона» знає тільки той, хто її роздає.
+
+def assign(sheet_ref, tg_id, by_id):
+    """Закріплює путівку за водієм. tg_id = 0 — зняти."""
+    with db() as c:
+        if tg_id:
+            c.execute("INSERT INTO reys_assign(sheet_ref, tg_id, by_id, ts) VALUES(?,?,?,?) ON CONFLICT(sheet_ref) "
+                      "DO UPDATE SET tg_id=excluded.tg_id, by_id=excluded.by_id, ts=excluded.ts",
+                      (sheet_ref, int(tg_id), by_id, now()))
+        else:
+            c.execute("DELETE FROM reys_assign WHERE sheet_ref=?", (sheet_ref,))
+
+
+def assigned(sheet_ref):
+    with db() as c:
+        r = c.execute("SELECT tg_id FROM reys_assign WHERE sheet_ref=?", (sheet_ref,)).fetchone()
+    return r["tg_id"] if r else None
+
+
+def assignments():
+    with db() as c:
+        return {r["sheet_ref"]: r["tg_id"] for r in c.execute("SELECT sheet_ref, tg_id FROM reys_assign")}
+
+
+def taken_by(sheet_ref, not_uid):
+    """Хто інший уже відкрив або здав цю путівку (покинуті рейси не рахуються)."""
+    with db() as c:
+        r = c.execute("SELECT tg_id FROM reys_runs WHERE sheet_ref=? AND tg_id<>? AND status IN ('open','closed') "
+                      "ORDER BY id DESC LIMIT 1", (sheet_ref, not_uid)).fetchone()
+    return r["tg_id"] if r else None
+
+
+def saw(tg_id, name):
+    """Запам'ятовує ім'я людини з Telegram — щоб власник закріплював путівку за іменем, а не за номером."""
+    with db() as c:
+        c.execute("INSERT INTO reys_people(tg_id, name, seen) VALUES(?,?,?) ON CONFLICT(tg_id) "
+                  "DO UPDATE SET name=excluded.name, seen=excluded.seen", (tg_id, name or str(tg_id), now()))
+
+
+def known_people():
+    with db() as c:
+        return {r["tg_id"]: r["name"] for r in c.execute("SELECT tg_id, name FROM reys_people")}

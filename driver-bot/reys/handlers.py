@@ -35,6 +35,47 @@ def ids_from_env(name: str) -> set:
 
 
 ON_SENT = None               # необов'язкова функція бота: (chat_id, message_id) — «це повідомлення лишилось у чаті»
+ON_ACT = None                # необов'язкова функція бота: (tg_id, що зроблено) — журнал дій і сторож сплесків
+
+
+def act(uid, what):
+    """Каже боту про дію в рейсі (кнопка в чаті чи запит застосунку). Помилка тут не має зупиняти рейс."""
+    if ON_ACT:
+        try:
+            ON_ACT(int(uid or 0), str(what)[:40])
+        except Exception as e:
+            log.warning("reys: on_act: %s", e)
+
+
+class Refused(Exception):
+    """Відмова, яку показуємо людині як є."""
+
+
+def may_open(uid, sheet_ref) -> bool:
+    """Чужу путівку не відкрити: власник — будь-яку, водій — тільки закріплену за ним."""
+    return uid == ADMIN or store.assigned(sheet_ref) == uid
+
+
+def guard_start(uid, new_run, force=False):
+    """Перед відкриттям рейсу. Повертає True, якщо цей самий рейс уже відкрито (нічого робити не треба).
+    Рейс з відмітками не скидається: у ньому гроші, які ще не здано касиру."""
+    ref = new_run.get("sheet_ref", "")
+    real = not new_run.get("demo") and not new_run.get("snap")
+    if real and uid != ADMIN:
+        if not may_open(uid, ref):
+            raise Refused("Цю путівку за тобою не закріплено")
+        if store.taken_by(ref, uid):
+            raise Refused("Цю путівку вже відкрив інший водій")
+    run_id, old = store.open_run(uid)
+    if not old:
+        return False
+    if real and old.get("sheet_ref") == ref:
+        return True
+    if engine.has_marks(old) and not (uid == ADMIN and force):
+        raise Refused("У тебе відкритий рейс з відмітками. Спершу здай у ньому касу.")
+    if engine.has_marks(old):
+        store.log(run_id, uid, "drop", **{k: v for k, v in engine.totals(old).items() if k != "why"})
+    return False
 
 
 def sent(msg):
@@ -48,10 +89,10 @@ def sent(msg):
     return msg
 
 
-def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None):
+def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None):
     """Викликати один раз у main() ПЕРЕД підключенням основного роутера бота."""
-    global ON_SENT
-    ON_SENT = on_sent
+    global ON_SENT, ON_ACT
+    ON_SENT, ON_ACT = on_sent, on_act
     from . import web                       # тут, а не вгорі: web сам користується цим файлом
     if db_path:
         store.DB_PATH = db_path
@@ -333,12 +374,12 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
             sheets = await list_sheets(day)
             text += f"Путівки за {day:%d.%m}:" if sheets else f"За {day:%d.%m} путівок у 1С ще немає."
             rows += [[(f"Путівка {s['Date'][11:16]} · №{s['Number'].lstrip('0')}", f"r:ld1:{s['Ref_Key']}")]
-                     for s in sheets]
+                     for s in sheets if may_open(m.from_user.id, s["Ref_Key"])]
         except ValueError:
             text += "Дата не розпізнана. Приклад: /reys 24.11"
         except onec.OneCError as e:
             text += f"1С не відповідає: {e}"
-    snaps = snapshots()
+    snaps = snapshots() if m.from_user.id == ADMIN else []
     if snaps:
         text += ("\n" if onec.configured() else "") + "Справжні путівки з 1С:"
         rows += [[(f"📄 {title}"[:60], f"r:sn:{stem}")] for stem, title in snaps]
@@ -444,6 +485,11 @@ async def ctx(cb: CallbackQuery):
 
 
 async def start_run(cb: CallbackQuery, run):
+    try:
+        if guard_start(cb.from_user.id, run, force=cb.from_user.id == ADMIN):
+            return await show(cb, *ui.screen_list(store.open_run(cb.from_user.id)[1]))
+    except Refused as e:
+        return await cb.answer(str(e), show_alert=True)
     run["screen"] = cb.message.message_id
     run_id = store.create(cb.from_user.id, run)
     store.log(run_id, cb.from_user.id, "start", sheet=run["sheet_no"], stops=len(engine.route(run)))
@@ -458,6 +504,8 @@ async def cb_demo(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("r:sn:"))
 async def cb_snapshot(cb: CallbackQuery):
+    if cb.from_user.id != ADMIN:
+        return await cb.answer("Це тільки для власника", show_alert=True)
     try:
         run = load_snapshot(cb.data.split(":", 2)[2])
     except onec.OneCError as e:
@@ -468,9 +516,12 @@ async def cb_snapshot(cb: CallbackQuery):
 
 @router.callback_query(F.data.startswith("r:ld1:"))
 async def cb_load(cb: CallbackQuery):
+    ref = cb.data.split(":", 2)[2]
+    if not may_open(cb.from_user.id, ref):
+        return await cb.answer("Цю путівку за тобою не закріплено", show_alert=True)
     await cb.answer("Читаю путівку з 1С…")
     try:
-        run = await load_run(cb.data.split(":", 2)[2])
+        run = await load_run(ref)
     except onec.OneCError as e:
         sent(await cb.message.answer(f"Не вдалося прочитати путівку: {e}"))
         return

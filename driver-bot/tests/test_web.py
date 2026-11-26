@@ -420,3 +420,115 @@ def test_on_sent_hook_reports_leftover_messages():
         assert [m for m in sent if isinstance(m, SendMessage)]
         handlers.ON_SENT = None
     asyncio.run(go())
+
+
+# ---------- безпека (перевірка 26.11) ----------
+
+SHEET = "11111111-2222-3333-4444-555555555555"
+OTHER = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+class Drivers:
+    """Двоє водіїв-тестувальників і підставна 1С з двома путівками."""
+    async def __aenter__(self):
+        os.environ["REYS_TESTERS"] = "333,444"
+        os.environ["REYS_HOURS"] = "0-24"
+        self.app = await App().__aenter__()
+        self._onec = (web.onec.URL, handlers.list_sheets, handlers.load_run)
+        web.onec.URL = "http://stub"
+
+        async def sheets(day):
+            return [{"Ref_Key": SHEET, "Number": "0008389", "Date": "2026-11-26T13:01:00"},
+                    {"Ref_Key": OTHER, "Number": "0008390", "Date": "2026-11-26T16:26:00"}]
+
+        async def load(ref):
+            from reys import build
+            run = build.demo_run(handlers.today())
+            run.pop("demo")
+            run.update(sheet_ref=ref, sheet_no=ref[:4])
+            return run
+        handlers.list_sheets, handlers.load_run = sheets, load
+        return self.app
+
+    async def __aexit__(self, *a):
+        web.onec.URL, handlers.list_sheets, handlers.load_run = self._onec
+        os.environ.pop("REYS_TESTERS", None)
+        os.environ.pop("REYS_HOURS", None)
+        await self.app.__aexit__(*a)
+
+
+def test_driver_opens_only_own_sheet():
+    """Чужу путівку не відкрити ні зі списку, ні за її кодом; власник закріплює путівку за водієм."""
+    async def go():
+        async with Drivers() as app:
+            j = (await app.call("state", who=333))[1]
+            assert j["menu"]["sheets"] == [] and "не закріплено" in j["menu"]["note"] and "people" not in j["menu"]
+            assert not (await app.call("start", who=333, id="1c:" + SHEET))[1]["ok"]           # знає код — все одно ні
+            assert not (await app.call("start", who=333, id="sn:2026-11-25_1301_8389"))[1]["ok"]   # знімки — лише власнику
+            assert not (await app.call("assign", who=333, id="1c:" + SHEET, to=333))[1]["ok"]  # сам собі не закріпить
+            await app.call("state", who=444)
+            m = (await app.call("state"))[1]["menu"]                                             # власник бачить усе
+            assert [s["id"] for s in m["sheets"]] == ["1c:" + SHEET, "1c:" + OTHER]
+            assert {p["id"] for p in m["people"]} == {333, 444}
+            assert not (await app.call("assign", id="1c:" + SHEET, to=999))[1]["ok"]           # не з нашого списку
+            m = (await app.call("assign", id="1c:" + SHEET, to=333))[1]["menu"]
+            assert m["sheets"][0]["to"] == 333 and m["sheets"][0]["who"] == "Тест"
+            j = (await app.call("state", who=333))[1]
+            assert [s["id"] for s in j["menu"]["sheets"]] == ["1c:" + SHEET]                    # тепер бачить свою
+            assert (await app.call("state", who=444))[1]["menu"]["sheets"] == []                # сусід — ні
+            assert not (await app.call("start", who=444, id="1c:" + SHEET))[1]["ok"]
+            assert (await app.call("start", who=333, id="1c:" + SHEET))[1]["run"]["totals"]["left"] == 5
+            assert not (await app.call("assign", id="1c:" + SHEET, to=444))[1]["ok"]           # уже в роботі — не перекинути
+            assert (await app.call("start", id="1c:" + SHEET))[1]["ok"]                         # власник — будь-яку
+    asyncio.run(go())
+
+
+def test_open_run_with_marks_is_not_dropped():
+    """Відкритий рейс з грошима не скидається новим: водій спершу здає касу; повторне відкриття нічого не стирає."""
+    async def go():
+        async with Drivers() as app:
+            await app.call("assign", id="1c:" + SHEET, to=333)
+            await app.call("assign", id="1c:" + OTHER, to=333)
+            await app.call("start", who=333, id="1c:" + SHEET)
+            assert (await app.call("start", who=333, id="demo"))[1]["ok"]                       # порожній рейс можна замінити
+            await app.call("start", who=333, id="1c:" + SHEET)
+            await app.call("all", who=333, i=0)
+            j = (await app.call("start", who=333, id="1c:" + SHEET))[1]                         # той самий — лишається як є
+            assert j["ok"] and j["run"]["totals"]["cash"] == 1501.0
+            for other in ("1c:" + OTHER, "demo"):
+                j = (await app.call("start", who=333, id=other, force=True))[1]                  # force від водія не діє
+                assert not j["ok"] and "здай" in j["msg"] and j["run"]["totals"]["cash"] == 1501.0
+            assert (await app.call("menu", who=333))[1]["menu"]["locked"]
+            await app.call("start", id="demo")                                                   # власник: без force — теж ні
+            await app.call("all", i=0)
+            assert not (await app.call("start", id="demo"))[1]["ok"]
+            j = (await app.call("start", id="demo", force=True))[1]                              # з підтвердженням — так
+            assert j["ok"] and j["run"]["totals"]["cash"] == 0
+            with store.db() as c:
+                assert c.execute("SELECT COUNT(*) n FROM reys_events WHERE action='drop'").fetchone()["n"] == 1
+    asyncio.run(go())
+
+
+def test_every_app_request_reaches_the_guard():
+    """Сторож бота бачить кожен запит застосунку, відмови й перевищення ліміту."""
+    async def go():
+        async with Drivers() as app:
+            seen = []
+            handlers.ON_ACT = lambda uid, what: seen.append((uid, what))
+            try:
+                await app.call("state")
+                await app.call("state", init="user=x&hash=0")
+                await app.call("state", who=STRANGER)
+                await app.call("assign", id="1c:" + SHEET, to=333)
+                assert seen == [(ME, "app:state"), (0, "401"), (STRANGER, "403"), (ME, "app:assign"), (ME, "assign:333")]
+                web.HITS.clear()
+                seen.clear()
+                codes = [(await app.call("state", who=333))[0] for _ in range(web.RATE + 1)]
+                assert web.RATE == 40 and codes[-1] == 429 and seen[-1] == (333, "429") and len(seen) == web.RATE + 1
+                handlers.ON_ACT = lambda *a: 1 / 0                                               # зламаний сторож рейс не зупиняє
+                web.HITS.clear()
+                assert (await app.call("state"))[0] == 200
+            finally:
+                handlers.ON_ACT = None
+                web.HITS.clear()
+    asyncio.run(go())
