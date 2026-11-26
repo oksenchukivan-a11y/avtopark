@@ -55,6 +55,7 @@ h1{font-size:20px;margin:0;font-weight:800}
 .row .nm{font-weight:800;display:flex;justify-content:space-between;gap:10px}
 .row .nm span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .nm span:last-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+.nopay{display:inline-block;background:#ffd84d;color:#3a2c00;font-weight:700;padding:0 8px;border-radius:8px;line-height:1.5}
 .row .sub{font-size:14px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .call{width:56px;border-radius:16px;border:1px solid var(--cash);background:var(--cash-soft);font-size:24px;display:grid;place-items:center;text-decoration:none;color:inherit}
 .row .call.edit{border-color:var(--bank);background:var(--bank-soft);font-size:22px;font-family:inherit}
@@ -179,10 +180,10 @@ function vMenu(){
 function rowHtml(st){
   const sub = [];
   if (st.debt > 0) sub.push(`<span class="red">🔴 борг ${money(st.debt)}</span>`);
-  if (st.free) sub.push("⚪ без оплати");
+  if (st.free && st.due > 0) sub.push(`<span class="nopay">без оплати</span>`);   // на папері це червона ручка — тут жовта плашка; якщо боргу немає, вона вже стоїть праворуч
   if (st.flags.length) sub.push("❗ " + esc(st.flags.join(", ")));
   if (st.addr) sub.push(esc(st.addr));
-  const right = st.free && st.due <= 0 ? "⚪" : money(st.due);
+  const right = st.free && st.due <= 0 ? `<span class="nopay">без оплати</span>` : money(st.due);
   return `<div class="row"><button class="main${st.debt > 0 ? " debt" : ""}" data-a="open" data-i="${st.i}">
     <div class="nm"><span>${esc(st.name)}</span><span>${right}</span></div>
     <div class="sub">${sub.join(" · ")}</div></button>${callBtn(st, "call")}</div>`;
@@ -219,14 +220,14 @@ function vList(){
 function vCard(){
   const r = S.run, st = stop(), pos = r.order.indexOf(st.i);
   let h = pos >= 0 ? `<div class="small muted">Точка ${pos + 1} з ${r.order.length}</div><div class="bar"><u style="width:${100 * (pos + 1) / r.order.length}%"></u></div>` : `<div class="small muted">Борг без доставки</div>`;
-  h += st.free && st.due <= 0 ? `<div class="big">⚪ Без оплати</div><div class="muted">так написав менеджер</div>` : `<div class="big">${money(st.due)}</div><div class="muted">💰 до збору</div>`;
+  h += st.free && st.due <= 0 ? `<div class="big"><span class="nopay">Без оплати</span></div><div class="muted">так написав менеджер</div>` : `<div class="big">${money(st.due)}</div><div class="muted">💰 до збору</div>`;
   h += `<div class="card"><b class="h">📍 ${esc(st.name.toUpperCase())}</b>${st.addr ? `<div>${esc(st.addr)}</div>` : ""}
     ${st.comments.map(c => `<div>💬 «${esc(c)}»</div>`).join("")}
     ${st.flags.length ? `<div class="red"><b>❗ ${esc(st.flags.join(", "))}</b></div>` : ""}
     <div class="calls">${st.phones.length ? `<a class="btn go" ${telAttrs(st.phones[0])}>📞 Салон</a>` : `<span class="btn" style="opacity:.4">📞 Салон</span>`}
     ${mgrBtns(st) || `<button class="btn nophone" data-a="nophone" data-n="">📞 Менеджер</button>`}</div></div>`;
-  if (st.ride.length) h += `<div class="card"><b class="h">📦 Сьогодні${st.free ? " · без оплати" : ""}</b>
-    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.who ? ` · <span class="muted">${esc(x.who)}</span>` : ""}${x.bo && !st.free ? " · без оплати" : ""}</span><span>${money(x.sum)}</span></div>`).join("")}
+  if (st.ride.length) h += `<div class="card"><b class="h">📦 Сьогодні${st.free ? ` <span class="nopay">без оплати</span>` : ""}</b>
+    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.who ? ` · <span class="muted">${esc(x.who)}</span>` : ""}${x.bo && !st.free ? ` <span class="nopay">без оплати</span>` : ""}</span><span>${money(x.sum)}</span></div>`).join("")}
     ${st.probs.map(p => `<div class="line"><span>⚠️ ${esc(p.text)}</span><span>−${money(p.cut)}</span></div>`).join("")}</div>`;
   if (st.wait.length) h += `<div class="card wait"><b class="h">⏸ Не їде сьогодні</b>${st.wait.map(w => `<div class="line"><span>№ ${esc(w.no)} · ${esc(w.why)} ${esc(w.when)}</span><span>${money(w.sum)}</span></div>`).join("")}</div>`;
   if (st.debts.length) h += `<div class="card debt"><div class="line"><b>🔴 Борг</b><span>${money(st.debt)}</span></div>

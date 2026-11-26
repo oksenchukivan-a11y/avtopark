@@ -92,9 +92,9 @@ def card_text(st, head=""):
     out.append(q(*who))
     ride = e.riding(st)
     if ride:
-        lines = [f"📦 <b>Сьогодні</b>" + (" · без оплати" if e.free(st) else "")]
+        lines = [f"📦 <b>Сьогодні</b>" + (" · 🟨 <b>БЕЗ ОПЛАТИ</b>" if e.free(st) else "")]
         for i in ride:
-            bo = " · без оплати" if "BO" in i["tags"] and not e.free(st) else ""
+            bo = " · 🟨 <b>БЕЗ ОПЛАТИ</b>" if "BO" in i["tags"] and not e.free(st) else ""
             lines.append(f"№ {h(i['no'])} · {e.money(i['sum'])}{bo}")
         for p in st["probs"]:
             lines.append(f"⚠️ {e.PROBLEMS[p['kind']]}: {h(p['item'])}{e.qty_txt(p)}"
