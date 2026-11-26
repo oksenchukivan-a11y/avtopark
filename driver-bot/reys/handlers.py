@@ -302,7 +302,9 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
     if web.ready():                                             # рейс відкривається застосунком
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text="🚚 Продовжити рейс" if run else "🚚 Відкрити рейс", web_app=WebAppInfo(url=web.launch_url()))]])
-        sent = await m.answer("🚚 <b>Рейс</b>", reply_markup=kb, parse_mode="HTML")
+        # рішення власника 26.11: кнопка під повідомленням не ширша за текст — тому текст на всю ширину телефона
+        sent = await m.answer(f"🚚 <b>Рейс · {today():%d.%m}</b>\nПутівка, точки й оплати — в одному вікні ⬇️",
+                              reply_markup=kb, parse_mode="HTML")
         store.set_screen(m.from_user.id, m.chat.id, sent.message_id)
         return
     rows = []

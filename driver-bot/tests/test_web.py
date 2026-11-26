@@ -72,6 +72,7 @@ def test_launcher_button_opens_app():
             msg = [m for m in sent if isinstance(m, SendMessage)][-1]
             btn = msg.reply_markup.inline_keyboard[0][0]
             assert btn.web_app.url.startswith("https://reys.example.test/?v=") and "Відкрити" in btn.text
+            assert len(msg.text.split("\n")[-1]) >= 30          # широкий текст — широка кнопка під ним
             assert store.screen(ME)[1]                                               # кнопку запам'ятали
             sent, _ = await app.tg.text("/reys")                                     # друга — стара зникає
             assert sum(isinstance(m, DeleteMessage) for m in sent) == 2
