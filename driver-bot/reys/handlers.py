@@ -34,8 +34,24 @@ def ids_from_env(name: str) -> set:
     return {int(x) for x in os.environ.get(name, "").replace(" ", "").split(",") if x.isdigit()}
 
 
-def setup(dp, admin_id: int = 0, db_path: str = ""):
+ON_SENT = None               # необов'язкова функція бота: (chat_id, message_id) — «це повідомлення лишилось у чаті»
+
+
+def sent(msg):
+    """Каже боту про повідомлення, яке модуль лишив у чаті, щоб його прибрала загальна чистка стрічки.
+    Екран рейсу сюди не потрапляє: його модуль прибирає сам. Помилка тут не має зупиняти рейс."""
+    if ON_SENT and msg is not None:
+        try:
+            ON_SENT(msg.chat.id, msg.message_id)
+        except Exception as e:
+            log.warning("reys: on_sent: %s", e)
+    return msg
+
+
+def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None):
     """Викликати один раз у main() ПЕРЕД підключенням основного роутера бота."""
+    global ON_SENT
+    ON_SENT = on_sent
     from . import web                       # тут, а не вгорі: web сам користується цим файлом
     if db_path:
         store.DB_PATH = db_path
@@ -349,7 +365,7 @@ async def note(m: Message, text: str):
         await m.delete()
     except TelegramBadRequest:
         pass
-    await m.answer(text, reply_markup=markup([[("Зрозуміло", "r:ph:x")]]))
+    sent(await m.answer(text, reply_markup=markup([[("Зрозуміло", "r:ph:x")]])))
 
 
 # ---------- телефони менеджерів без набору з клавіатури ----------
@@ -379,15 +395,15 @@ async def msg_contact(m: Message, state: FSMContext):
         pass
     if not nums or not names:
         why = "Номер не розпізнано." if not nums else "Спершу відкрий будь-який рейс — тоді знатиму імена менеджерів."
-        return await m.answer(why, reply_markup=markup([[("Зрозуміло", "r:ph:x")]]))
+        return sent(await m.answer(why, reply_markup=markup([[("Зрозуміло", "r:ph:x")]])))
     names.sort(key=lambda n: (bool(store.phone(n)), n))             # без телефону — зверху
     who = " ".join(x for x in (m.contact.first_name, m.contact.last_name) if x)
     rows = [[(("✓ " if store.phone(n) else "") + n[:40], f"r:ph:{k}")] for k, n in enumerate(names[:20])]
     rows.append([("← Не записувати", "r:ph:x")])
     await state.set_state(Reys.phone)
     await state.update_data(phone=nums[0], names=names[:20])
-    await m.answer(f"📞 <b>{nums[0]}</b>\n<blockquote>{who}</blockquote>\nЧий це номер?", reply_markup=markup(rows),
-                   parse_mode="HTML")
+    sent(await m.answer(f"📞 <b>{nums[0]}</b>\n<blockquote>{who}</blockquote>\nЧий це номер?",
+                        reply_markup=markup(rows), parse_mode="HTML"))
 
 
 @router.callback_query(F.data.startswith("r:ph:"))
@@ -456,7 +472,7 @@ async def cb_load(cb: CallbackQuery):
     try:
         run = await load_run(cb.data.split(":", 2)[2])
     except onec.OneCError as e:
-        await cb.message.answer(f"Не вдалося прочитати путівку: {e}")
+        sent(await cb.message.answer(f"Не вдалося прочитати путівку: {e}"))
         return
     await start_run(cb, run)
 
@@ -703,8 +719,8 @@ async def cb_call(cb: CallbackQuery, bot: Bot):
                                show_alert=True)
     await cb.answer()
     name = who.split()
-    await bot.send_contact(cb.message.chat.id, phone_number=ph, first_name=name[-1] if name else "Менеджер",
-                           last_name=name[0] if len(name) > 1 else None)
+    sent(await bot.send_contact(cb.message.chat.id, phone_number=ph, first_name=name[-1] if name else "Менеджер",
+                                last_name=name[0] if len(name) > 1 else None))
 
 
 # ---------- проблема з товаром ----------

@@ -394,3 +394,29 @@ def test_service_replies_do_not_stay_in_chat():
         assert any(isinstance(m, DeleteMessage) for m in await tg.tap("r:ph:x"))
         assert store.phone("тестова  олена") == "+380501112233" and store.direction("Тестова Олена") == "волосся"
     asyncio.run(go())
+
+
+def test_on_sent_hook_reports_leftover_messages():
+    """Бот може підключити свою чистку стрічки: модуль каже про кожне повідомлення, яке лишив, крім екрана рейсу."""
+    import tempfile
+    from aiogram import Dispatcher
+    from aiogram.fsm.storage.memory import MemoryStorage
+    import reys
+    from test_flow import Tg
+
+    async def go():
+        tg, seen = Tg(), []
+        handlers.router._parent_router = None
+        tg.dp = Dispatcher(storage=MemoryStorage())
+        reys.setup(tg.dp, admin_id=ME, db_path=os.path.join(tempfile.mkdtemp(), "t.db"),
+                   on_sent=lambda chat, mid: seen.append((chat, mid)))
+        sent, _ = await tg.text("/reys_dir")
+        ans = [m for m in sent if isinstance(m, SendMessage)]
+        assert len(ans) == 1 and seen == [(ME, tg.session.n)]                 # службову відповідь повідомлено
+        await tg.text("/reys")                                                # екран рейсу — ні
+        assert len(seen) == 1
+        handlers.ON_SENT = lambda *a: 1 / 0                                   # зламана функція бота рейс не зупиняє
+        sent, _ = await tg.text("/reys_dir")
+        assert [m for m in sent if isinstance(m, SendMessage)]
+        handlers.ON_SENT = None
+    asyncio.run(go())
