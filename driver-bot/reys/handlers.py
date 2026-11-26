@@ -415,7 +415,7 @@ async def cmd_dir(m: Message, command: CommandObject):
 async def ctx(cb: CallbackQuery):
     run_id, run = store.open_run(cb.from_user.id)
     if not run:
-        await cb.answer("Рейс не відкрито. Напиши /reys", show_alert=True)
+        await cb.answer("Рейс не відкрито. Відкрий його кнопкою 🚚 Рейс", show_alert=True)
     return run_id, run
 
 
@@ -504,7 +504,7 @@ async def stop_ctx(cb: CallbackQuery):
         return None, None, None, None
     i = int(parts(cb)[2])
     if i >= len(run["stops"]):
-        await cb.answer("Список змінився, відкрий рейс заново: /reys", show_alert=True)
+        await cb.answer("Список змінився. Відкрий рейс заново кнопкою 🚚 Рейс", show_alert=True)
         return None, None, None, None
     return run_id, run, i, run["stops"][i]
 
