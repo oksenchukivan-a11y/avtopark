@@ -56,6 +56,7 @@ h1{font-size:20px;margin:0;font-weight:800}
 .row .nm span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .nm span:last-child{white-space:nowrap;font-variant-numeric:tabular-nums}
 .nopay{display:inline-block;background:#ffd84d;color:#3a2c00;font-weight:700;padding:0 8px;border-radius:8px;line-height:1.5}
+.row .note{font-size:15px;font-weight:600;color:var(--ink);background:var(--warn-soft);border-left:4px solid var(--warn);border-radius:6px;padding:4px 8px;margin-top:6px;white-space:normal;text-align:left}
 .row .sub{font-size:14px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .call{width:56px;border-radius:16px;border:1px solid var(--cash);background:var(--cash-soft);font-size:24px;display:grid;place-items:center;text-decoration:none;color:inherit}
 .row .call.edit{border-color:var(--bank);background:var(--bank-soft);font-size:22px;font-family:inherit}
@@ -186,7 +187,7 @@ function rowHtml(st){
   const right = st.free && st.due <= 0 ? `<span class="nopay">без оплати</span>` : money(st.due);
   return `<div class="row"><button class="main${st.debt > 0 ? " debt" : ""}" data-a="open" data-i="${st.i}">
     <div class="nm"><span>${esc(st.name)}</span><span>${right}</span></div>
-    <div class="sub">${sub.join(" · ")}</div></button>${callBtn(st, "call")}</div>`;
+    <div class="sub">${sub.join(" · ")}</div>${(st.comments || []).map(c => `<div class="note">💬 ${esc(c)}</div>`).join("")}</button>${callBtn(st, "call")}</div>`;
 }
 function doneRow(st){
   const s = st.status, ico = s.cash > 0 ? (s.kind === "paid" ? "🟢" : "🟡") : (s.reason === "acct" ? "💳" : s.kind === "given" ? "⚪" : "🔴");
