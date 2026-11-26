@@ -179,7 +179,7 @@ function vMenu(){
   if (m.sheets.length) h += `<div class="muted">Яку путівку відкрити?</div>`;
   else if (!m.note) h += `<div class="card">Путівок на сьогодні ще немає.</div>`;
   m.sheets.forEach(s => {
-    h += `<button class="btn left" data-a="start" data-id="${esc(s.id)}"><span>📄 ${esc(s.title)}</span><span>›</span></button>`;
+    h += `<button class="btn left" data-a="start" data-id="${esc(s.id)}"><span>📄 ${esc(s.title)}${s.sub ? `<div class="small muted" style="font-weight:500">${esc(s.sub)}</div>` : ""}</span><span>›</span></button>`;
     if (m.people && s.id.startsWith("1c:"))        // власник закріплює путівку за водієм
       h += `<div class="chips" style="margin:-2px 0 12px"><span class="small muted" style="align-self:center">Чия:</span>${m.people.length ? m.people.map(p => `<button class="chip${s.to === p.id ? " on" : ""}" data-a="assign" data-id="${esc(s.id)}" data-to="${s.to === p.id ? 0 : p.id}">👤 ${esc(p.name)}</button>`).join("") : `<span class="small muted" style="align-self:center">водіїв у рейсі ще немає</span>`}</div>`;
   });

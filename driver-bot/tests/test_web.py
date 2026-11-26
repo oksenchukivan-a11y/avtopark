@@ -437,8 +437,12 @@ class Drivers:
         os.environ["REYS_TESTERS"] = "333,444"
         os.environ["REYS_HOURS"] = "0-24"
         self.app = await App().__aenter__()
-        self._onec = (web.onec.URL, handlers.list_sheets, handlers.load_run)
+        self._onec = (web.onec.URL, handlers.list_sheets, handlers.load_run, handlers.sheet_cities)
         web.onec.URL = "http://stub"
+
+        async def cities(ref):
+            return (["Ахтырка"] * 34 + ["тростянец"] * 33 + ["Сумы"], 68) if ref == OTHER else (["Сумы"] * 9, 9)
+        handlers.sheet_cities = cities
 
         async def sheets(day):
             return [{"Ref_Key": SHEET, "Number": "0008389", "Date": "2026-11-26T13:01:00"},
@@ -454,7 +458,7 @@ class Drivers:
         return self.app
 
     async def __aexit__(self, *a):
-        web.onec.URL, handlers.list_sheets, handlers.load_run = self._onec
+        web.onec.URL, handlers.list_sheets, handlers.load_run, handlers.sheet_cities = self._onec
         os.environ.pop("REYS_TESTERS", None)
         os.environ.pop("REYS_HOURS", None)
         await self.app.__aexit__(*a)
@@ -560,4 +564,33 @@ def test_closed_real_run_reaches_someone():
             before = len(app.tg.session.sent)
             await app.call("close", who=333)
             assert not [m for m in app.tg.session.sent[before:] if isinstance(m, SendMessage)]
+    asyncio.run(go())
+
+
+def test_sheet_is_named_by_direction_not_number():
+    """Власник 27.11: «просто номера, як понять» — у меню напрямок, номер і час дрібно."""
+    from reys import build
+    d = build.direction
+    assert d(["Сумы"] * 9 + ["сумы"]) == "Суми · місто"
+    assert d(["Ахтырка"] * 34 + ["Тростянец"] * 33) == "Охтирка · Тростянець"
+    assert d(["Ромны"] * 41 + ["Недригайлов"] * 5 + ["Л.Долина"] * 3) == "Ромни"          # дрібні заїзди в назву не йдуть
+    assert d(["Глухов"] * 24 + ["Кролевец"] * 9 + ["С-Буда", "Ямполь"]) == "Глухів · Кролевець"
+    assert d(["шостка "] * 63) == "Шостка" and d(["", None]) == "" and d(["г. Конотоп"]) == "Конотоп"
+
+    async def go():
+        async with Drivers() as app:
+            m = (await app.call("state"))[1]["menu"]["sheets"]
+            assert (m[0]["title"], m[0]["sub"]) == ("Суми · місто", "9 точок · 13:01 · № 8389")
+            assert (m[1]["title"], m[1]["sub"]) == ("Охтирка · Тростянець", "68 точок · 16:26 · № 8390")
+            calls = []
+
+            async def boom(ref):
+                calls.append(ref)
+                raise web.onec.OneCError("немає зв'язку")
+            handlers.sheet_cities = boom
+            assert (await app.call("menu"))[1]["menu"]["sheets"][0]["title"] == "Суми · місто" and not calls   # з кешу
+            with store.db() as c:
+                c.execute("DELETE FROM reys_titles")
+            m = (await app.call("menu"))[1]["menu"]["sheets"]                                   # 1С мовчить — меню живе
+            assert m[0]["title"] == "Путівка 13:01" and m[0]["sub"] == "13:01 · № 8389" and len(calls) == 2
     asyncio.run(go())

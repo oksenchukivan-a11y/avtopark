@@ -143,7 +143,8 @@ async def menu(uid, day=None):
             for s in await hd.list_sheets(day):
                 ref = s["Ref_Key"]
                 if admin or own.get(ref) == uid:
-                    row = {"id": "1c:" + ref, "title": f"Путівка {s['Date'][11:16]} · № {s['Number'].lstrip('0')}"}
+                    name, sub = await hd.sheet_label(s)
+                    row = {"id": "1c:" + ref, "title": name, "sub": sub}
                     if admin:
                         row.update(to=own.get(ref) or 0, who=names.get(own.get(ref), "") if own.get(ref) else "")
                     sheets.append(row)

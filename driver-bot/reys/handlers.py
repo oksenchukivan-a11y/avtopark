@@ -197,6 +197,35 @@ async def list_sheets(day: date):
                            orderby="Date", top=20)
 
 
+async def sheet_cities(ref: str):
+    """Міста клієнтів путівки і скільки в ній точок з доставкою. Одна путівка — два-три запити до 1С."""
+    rows = await onec.call("query", object="Document_ПутевойЛист", filter=f"Ref_Key eq guid'{ref}'",
+                           select="Ref_Key,Контрагенты", top=1)
+    lines = rows[0]["Контрагенты"] if rows else []
+    deliver = {r["Контрагент_Key"] for r in lines if r["Документ_Key"] != onec.ZERO}
+    keys = deliver or {r["Контрагент_Key"] for r in lines}
+    cards = await onec.by_keys("Catalog_Контрагенты", keys, "Ref_Key,ДополнительноеОписание")
+    return [c.get("ДополнительноеОписание", "") for c in cards], len(deliver)
+
+
+async def sheet_label(stub):
+    """Назва путівки для людини: напрямок замість номера. Власник: «просто номера, як понять»."""
+    ref, hhmm, no = stub["Ref_Key"], stub["Date"][11:16], stub["Number"].lstrip("0")
+    got = store.title(ref)
+    if got is None:
+        try:
+            cities, points = await sheet_cities(ref)
+            got = (build.direction(cities), points)
+            store.set_title(ref, *got)
+        except (onec.OneCError, KeyError, IndexError) as e:        # без назви меню теж працює
+            log.warning("reys: напрямок путівки %s не визначено: %s", no, e)
+            got = ("", 0)
+    name, points = got
+    sub = " · ".join(x for x in (f"{points} {ui.plural(points, 'точка', 'точки', 'точок')}" if points else "",
+                                 hhmm, f"№ {no}") if x)
+    return (name or f"Путівка {hhmm}"), sub
+
+
 async def load_run(ref: str):
     rows = await onec.call("query", object="Document_ПутевойЛист", filter=f"Ref_Key eq guid'{ref}'",
                            select="Ref_Key,Number,Date,Контрагенты", top=1)
@@ -208,8 +237,8 @@ async def load_run(ref: str):
     invoices = await onec.by_keys(REAL, inv_keys, "Ref_Key,Number,Date,СуммаДокумента,Контрагент_Key,Агент_Key")
     with_inv = {i["Контрагент_Key"] for i in invoices}
     wanted = with_inv | {r["Контрагент_Key"] for r in lines if r["Долг"] > 0.5}
-    names = {r["Ref_Key"]: r["Description"]
-             for r in await onec.by_keys("Catalog_Контрагенты", wanted, "Ref_Key,Description")}
+    cards = await onec.by_keys("Catalog_Контрагенты", wanted, "Ref_Key,Description,ДополнительноеОписание")
+    names = {r["Ref_Key"]: r["Description"] for r in cards}
     agents = {r["Ref_Key"]: r["Description"] for r in await onec.by_keys(
         "Catalog_ФизическиеЛица", {i.get("Агент_Key") for i in invoices}, "Ref_Key,Description")}
     day = datetime.fromisoformat(sheet["Date"][:19])
@@ -219,6 +248,9 @@ async def load_run(ref: str):
         field="Контрагент_Key",
         extra=f"Date ge datetime'{since}T00:00:00' and Date le datetime'{sheet['Date'][:19]}' and Posted eq true")
     run = build.build_run(sheet, invoices, names, agents, orders)
+    where = build.direction([r.get("ДополнительноеОписание", "") for r in cards if r["Ref_Key"] in with_inv])
+    if where:                                                    # у шапці рейсу — куди їдемо, а не номер
+        run["title"] = f"{where} · {day:%d.%m}"
     AGENTS.update(agents)
     await load_phones(run)
     await load_recent_managers(run, day)
@@ -376,8 +408,10 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
             day = datetime.strptime(arg + f".{today().year}", "%d.%m.%Y").date() if arg else today()
             sheets = await list_sheets(day)
             text += f"Путівки за {day:%d.%m}:" if sheets else f"За {day:%d.%m} путівок у 1С ще немає."
-            rows += [[(f"Путівка {s['Date'][11:16]} · №{s['Number'].lstrip('0')}", f"r:ld1:{s['Ref_Key']}")]
-                     for s in sheets if may_open(m.from_user.id, s["Ref_Key"])]
+            for s in sheets:
+                if may_open(m.from_user.id, s["Ref_Key"]):
+                    name, sub = await sheet_label(s)
+                    rows.append([(f"{name} · {s['Date'][11:16]}"[:60], f"r:ld1:{s['Ref_Key']}")])
         except ValueError:
             text += "Дата не розпізнана. Приклад: /reys 24.11"
         except onec.OneCError as e:

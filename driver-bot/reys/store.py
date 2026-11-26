@@ -26,6 +26,7 @@ def init():
         CREATE TABLE IF NOT EXISTS reys_dirs(name TEXT PRIMARY KEY, dir TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS reys_assign(sheet_ref TEXT PRIMARY KEY, tg_id INTEGER NOT NULL, by_id INTEGER, ts TEXT);
         CREATE TABLE IF NOT EXISTS reys_people(tg_id INTEGER PRIMARY KEY, name TEXT, seen TEXT);
+        CREATE TABLE IF NOT EXISTS reys_titles(sheet_ref TEXT PRIMARY KEY, title TEXT, points INTEGER, ts TEXT);
         CREATE TABLE IF NOT EXISTS reys_screen(tg_id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER);
         """)
         if "fixed" not in {r["name"] for r in c.execute("PRAGMA table_info(reys_people)")}:
@@ -193,3 +194,21 @@ def set_name(tg_id, name):
 def known_people():
     with db() as c:
         return {r["tg_id"]: r["name"] for r in c.execute("SELECT tg_id, name FROM reys_people")}
+
+
+# ---------- назва путівки ----------
+
+def title(sheet_ref, max_age_min=20):
+    """(напрямок, скільки точок) з кешу, поки свіжий: щоб меню не ходило в 1С на кожне відкриття."""
+    with db() as c:
+        r = c.execute("SELECT title, points, ts FROM reys_titles WHERE sheet_ref=?", (sheet_ref,)).fetchone()
+    if not r or (datetime.now() - datetime.fromisoformat(r["ts"])).total_seconds() > max_age_min * 60:
+        return None
+    return r["title"], r["points"]
+
+
+def set_title(sheet_ref, name, points):
+    with db() as c:
+        c.execute("INSERT INTO reys_titles(sheet_ref, title, points, ts) VALUES(?,?,?,?) ON CONFLICT(sheet_ref) "
+                  "DO UPDATE SET title=excluded.title, points=excluded.points, ts=excluded.ts",
+                  (sheet_ref, name, int(points), now()))
