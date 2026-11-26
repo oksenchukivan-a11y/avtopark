@@ -191,8 +191,9 @@ def load_snapshot(stem: str):
 # ---------- завантаження з 1С ----------
 
 async def read_sheets(since: str, until: str):
-    return await onec.call("query", object="Document_ПутевойЛист", select="Ref_Key,Number,Date",
+    rows = await onec.call("query", object="Document_ПутевойЛист", select="Ref_Key,Number,Date,DeletionMark",
                            filter=f"Date ge datetime'{since}' and Date le datetime'{until}'", orderby="Date", top=40)
+    return [r for r in rows if not r.get("DeletionMark")]          # помічені на видалення не показуємо
 
 
 async def list_sheets(day: date):
@@ -206,7 +207,9 @@ async def list_sheets(day: date):
         printed = datetime.fromisoformat(s["Date"][:19])
         if printed.date() == day or (printed.hour >= build.EVENING and s["Ref_Key"] not in done):
             out.append(s)
-    return out
+    # спершу те, що везуть сьогодні (учорашні вечірні), потім надруковане сьогодні на завтра
+    return sorted(out, key=lambda s: (datetime.fromisoformat(s["Date"][:19]).date() == day
+                                      and int(s["Date"][11:13]) >= build.EVENING, s["Date"]))
 
 
 async def sheet_cities(ref: str):
@@ -233,10 +236,10 @@ async def sheet_label(stub):
             log.warning("reys: напрямок путівки %s не визначено: %s", no, e)
             got = ("", 0)
     name, points = got
-    ride = build.ride_day(datetime.fromisoformat(stub["Date"][:19]), name)
-    when = f"на {ride:%d.%m}" if ride.isoformat() != stub["Date"][:10] else hhmm      # вечірня — «на завтра»
-    sub = " · ".join(x for x in (f"{points} {ui.plural(points, 'точка', 'точки', 'точок')}" if points else "",
-                                 when, f"№ {no}") if x)
+    ride = build.ride_day(datetime.fromisoformat(stub["Date"][:19]), name)      # вечірню обласну везуть завтра
+    sub = " · ".join(x for x in (f"{build.WEEKDAYS[ride.weekday()]} {ride:%d.%m}",
+                                 f"{points} {ui.plural(points, 'точка', 'точки', 'точок')}" if points else "",
+                                 f"№ {no}") if x)
     return (name or f"Путівка {hhmm}"), sub
 
 
@@ -426,7 +429,7 @@ async def cmd_reys(m: Message, command: CommandObject, state: FSMContext):
             for s in sheets:
                 if may_open(m.from_user.id, s["Ref_Key"]):
                     name, sub = await sheet_label(s)
-                    rows.append([(f"{name} · {s['Date'][11:16]}"[:60], f"r:ld1:{s['Ref_Key']}")])
+                    rows.append([(f"{name} · {sub}"[:60], f"r:ld1:{s['Ref_Key']}")])
         except ValueError:
             text += "Дата не розпізнана. Приклад: /reys 24.11"
         except onec.OneCError as e:

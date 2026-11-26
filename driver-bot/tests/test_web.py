@@ -580,8 +580,8 @@ def test_sheet_is_named_by_direction_not_number():
     async def go():
         async with Drivers() as app:
             m = (await app.call("state"))[1]["menu"]["sheets"]
-            assert (m[0]["title"], m[0]["sub"]) == ("Суми · місто", "9 точок · 13:01 · № 8389")
-            assert (m[1]["title"], m[1]["sub"]) == ("Охтирка · Тростянець", "68 точок · на 27.11 · № 8390")   # вечірня — на завтра
+            assert (m[0]["title"], m[0]["sub"]) == ("Суми · місто", "чт 26.11 · 9 точок · № 8389")
+            assert (m[1]["title"], m[1]["sub"]) == ("Охтирка · Тростянець", "пт 27.11 · 68 точок · № 8390")   # вечірня — на завтра
             calls = []
 
             async def boom(ref):
@@ -592,7 +592,7 @@ def test_sheet_is_named_by_direction_not_number():
             with store.db() as c:
                 c.execute("DELETE FROM reys_titles")
             m = (await app.call("menu"))[1]["menu"]["sheets"]                                   # 1С мовчить — меню живе
-            assert m[0]["title"] == "Путівка 13:01" and m[0]["sub"] == "13:01 · № 8389" and len(calls) == 2
+            assert m[0]["title"] == "Путівка 13:01" and m[0]["sub"] == "чт 26.11 · № 8389" and len(calls) == 2
     asyncio.run(go())
 
 
@@ -615,7 +615,7 @@ def test_evening_regional_sheet_is_seen_next_morning():
 
     async def read(since, until):
         asked.append((since, until))
-        return [r for r in rows if since <= r["Date"] <= until]
+        return [r for r in rows if since <= r["Date"] <= until and not r.get("DeletionMark")]
 
     async def go():
         async with App():
@@ -623,6 +623,7 @@ def test_evening_regional_sheet_is_seen_next_morning():
             try:
                 mon = [s["Ref_Key"] for s in await handlers.list_sheets(dt.date(2026, 11, 30))]
                 assert mon == ["fri-eve", "sun-eve", "mon-day", "mon-eve"] and asked[-1][0] == "2026-11-27T14:00:00"
+                rows.append({"Ref_Key": "gone", "Number": "9", "Date": "2026-11-30T12:00:00", "DeletionMark": True})
                 tue = [s["Ref_Key"] for s in await handlers.list_sheets(dt.date(2026, 12, 1))]
                 assert tue == ["mon-eve"] and asked[-1][0] == "2026-11-30T14:00:00"            # учорашня денна вже не показується
                 run = {"sheet_ref": "mon-eve", "sheet_no": "5", "day": "2026-12-01", "stops": [], "expenses": []}

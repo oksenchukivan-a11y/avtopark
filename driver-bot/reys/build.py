@@ -34,10 +34,11 @@ def direction(cities) -> str:
     total = sum(count.values())
     if top[0][0] == "Суми" and top[0][1] >= 0.6 * total:
         return "Суми · місто"
-    names = [top[0][0]] + [n for n, k in top[1:2] if k >= max(2, 0.15 * total)]
+    names = [top[0][0]] + [n for n, k in top[1:2] if k >= max(2, 0.12 * total)]
     return " · ".join(names)
 
 
+WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "нд")
 EVENING = 14            # путівку, надруковану після цієї години, везуть наступного дня (обласні друкують близько 16:30)
 
 
