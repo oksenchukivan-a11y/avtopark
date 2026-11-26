@@ -95,10 +95,12 @@ def card_text(st, head=""):
         lines = [f"📦 <b>Сьогодні</b>" + (" · 🟨 <b>БЕЗ ОПЛАТИ</b>" if e.free(st) else "")]
         for i in ride:
             bo = " · 🟨 <b>БЕЗ ОПЛАТИ</b>" if "BO" in i["tags"] and not e.free(st) else ""
-            lines.append(f"№ {h(i['no'])} · {e.money(i['sum'])}{bo}")
+            lines.append(f"№ {h(i['no'])} · {e.money(e.orig_sum(st, i))}{bo}")       # сума як у накладній
         for p in st["probs"]:
             lines.append(f"⚠️ {e.PROBLEMS[p['kind']]}: {h(p['item'])}{e.qty_txt(p)}"
                          + (f" (−{e.money(p['cut'])})" if p["cut"] else ""))
+        if e.has_cuts(st):                              # щоб було видно: повернення відняте
+            lines.append(f"💰 <b>Після повернення: {e.money(sum(i['sum'] for i in ride))}</b>")
         out.append(q(*lines))
     wait = []
     for i in st["inv"]:

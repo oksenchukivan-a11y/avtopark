@@ -63,8 +63,9 @@ def stop_view(st, i, people):
         "mgrs": mgrs, "debt_mgrs": e.debt_managers(st), "phones": st.get("phones") or [],
         "comments": comments, "flags": [LABELS[t] for t in flags], "free": free,
         "due": e.due(st), "today": e.today_due(st), "debt": e.debt_due(st),
-        "ride": [{"ref": x["ref"], "no": x["no"], "sum": x["sum"], "bo": "BO" in x["tags"],
+        "ride": [{"ref": x["ref"], "no": x["no"], "sum": x["sum"], "orig": e.orig_sum(st, x), "bo": "BO" in x["tags"],
                   "mgr": e.clean(x.get("manager", "")), "who": mgr_view(x.get("manager", ""), people)["short"] if many else ""} for x in ride],
+        "after": round(sum(x["sum"] for x in ride), 2) if e.has_cuts(st) else None,   # «після повернення»
         "wait": wait,
         "debts": [{"name": _debt_name(d), "sum": d["sum"], "mgr": e.clean(d.get("manager", "")),
                    "who": mgr_view(d.get("manager", ""), people)["short"] if many else ""}

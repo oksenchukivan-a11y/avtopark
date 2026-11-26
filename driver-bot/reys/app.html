@@ -35,6 +35,7 @@ h1{font-size:20px;margin:0;font-weight:800}
 .card b.h{display:block;margin-bottom:6px}
 .line{display:flex;justify-content:space-between;gap:12px;padding:3px 0}
 .line span:last-child{white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums}
+.line.total{border-top:1px solid var(--line);margin-top:6px;padding-top:8px}
 .big{font-size:30px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
 .count{font-size:22px;font-weight:800}
 /* смужка з машинкою */
@@ -228,8 +229,9 @@ function vCard(){
     <div class="calls">${st.phones.length ? `<a class="btn go" ${telAttrs(st.phones[0])}>📞 Салон</a>` : `<span class="btn" style="opacity:.4">📞 Салон</span>`}
     ${mgrBtns(st) || `<button class="btn nophone" data-a="nophone" data-n="">📞 Менеджер</button>`}</div></div>`;
   if (st.ride.length) h += `<div class="card"><b class="h">📦 Сьогодні${st.free ? ` <span class="nopay">без оплати</span>` : ""}</b>
-    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.who ? ` · <span class="muted">${esc(x.who)}</span>` : ""}${x.bo && !st.free ? ` <span class="nopay">без оплати</span>` : ""}</span><span>${money(x.sum)}</span></div>`).join("")}
-    ${st.probs.map(p => `<div class="line"><span>⚠️ ${esc(p.text)}</span><span>−${money(p.cut)}</span></div>`).join("")}</div>`;
+    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.who ? ` · <span class="muted">${esc(x.who)}</span>` : ""}${x.bo && !st.free ? ` <span class="nopay">без оплати</span>` : ""}</span><span>${money(x.orig ?? x.sum)}</span></div>`).join("")}
+    ${st.probs.map(p => `<div class="line"><span>⚠️ ${esc(p.text)}</span><span class="red">${p.cut ? "−" + money(p.cut) : ""}</span></div>`).join("")}
+    ${st.after != null ? `<div class="line total"><b>💰 Після повернення</b><span>${money(st.after)}</span></div>` : ""}</div>`;
   if (st.wait.length) h += `<div class="card wait"><b class="h">⏸ Не їде сьогодні</b>${st.wait.map(w => `<div class="line"><span>№ ${esc(w.no)} · ${esc(w.why)} ${esc(w.when)}</span><span>${money(w.sum)}</span></div>`).join("")}</div>`;
   if (st.debts.length) h += `<div class="card debt"><div class="line"><b>🔴 Борг</b><span>${money(st.debt)}</span></div>
     ${st.debts.map(d => `<div class="line"><span>${esc(d.name)}${d.who ? ` · <span class="muted">${esc(d.who)}</span>` : ""}</span><span>${money(d.sum)}</span></div>`).join("")}</div>`;

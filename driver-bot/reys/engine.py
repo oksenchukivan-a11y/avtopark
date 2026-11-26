@@ -124,6 +124,15 @@ def add_other(st, kind):
     st["probs"].append({"inv": "—", "kind": kind, "item": OTHER_ITEM, "qty": 0, "cut": 0.0})
 
 
+def orig_sum(st, inv):
+    """Сума накладної, як її виписали: поточна плюс усе, що з неї зняли поверненнями й нестачами."""
+    return round(inv["sum"] + sum(p["cut"] for p in st["probs"] if p["inv"] == inv["no"]), 2)
+
+
+def has_cuts(st) -> bool:
+    return any(p["cut"] for p in st["probs"])
+
+
 def qty_txt(p):
     return f" ×{p['qty']:g}" if p.get("qty") else ""
 

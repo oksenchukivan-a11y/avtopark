@@ -350,3 +350,30 @@ def test_other_product_keeps_the_sum():
         text, btns = tg.last_screen(await tg.tap("r:po:0:miss"))
         assert "не вистачає: інший товар, не з накладної" in text and "×" not in text and "1 501 ₴ до збору" in text
     asyncio.run(go())
+
+
+def test_card_shows_invoice_sum_and_total_after_return():
+    """Власник 26.11: на картці сума накладної як виписано, повернення окремим рядком, унизу — що лишилось."""
+    from test_flow import Tg
+
+    async def go():
+        async with App() as app:
+            run = (await app.call("start", id="demo"))[1]["run"]
+            assert run["stops"][0]["after"] is None and run["stops"][0]["ride"][0]["orig"] == 1501.0
+            items = (await app.call("items", i=0))[1]["items"]
+            st = (await app.call("problem", i=0, kind="refuse", rows=[{"ii": items[0]["ii"], "li": items[0]["li"], "qty": 2}]))[1]["run"]["stops"][0]
+            assert (st["ride"][0]["orig"], st["ride"][0]["sum"], st["after"], st["due"]) == (1501.0, 1131.0, 1131.0, 1131.0)
+            st = (await app.call("other", i=0, kind="miss"))[1]["run"]["stops"][0]      # «інший товар» суми не чіпає
+            assert st["after"] == 1131.0 and st["ride"][0]["orig"] == 1501.0
+        tg = Tg()
+        await tg.text("/reys")
+        tg.screen = 1001
+        await tg.tap("r:demo")
+        await tg.tap("r:o:0")
+        await tg.tap("r:pr:0")
+        await tg.tap("r:pk:0:refuse")
+        await tg.tap("r:pi:0:refuse:0:0:0")
+        text, _ = tg.last_screen(await tg.tap("r:px:0:refuse"))
+        assert "№ 1204 · 1 501 ₴" in text and "(−370 ₴)" in text and "Після повернення: 1 131 ₴" in text
+        assert "1 131 ₴ до збору" in text
+    asyncio.run(go())
