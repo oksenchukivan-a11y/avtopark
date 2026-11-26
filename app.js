@@ -6,7 +6,7 @@ try { if (sessionStorage.getItem('wipe')) { localStorage.clear(); sessionStorage
 
 // ===== Налаштування =====
 const FLESPI = 'https://flespi.io';
-const APP_VERSION = 'v104';          // показуємо в шапці — щоб видно було, що отримав свіже
+const APP_VERSION = 'v105';          // показуємо в шапці — щоб видно було, що отримав свіже
 const REFRESH_MS = 15000;          // авто-оновлення кожні 15 с: реакцію на кінець глушіння забезпечує fast-poll, а 10-с базовий темп зʼїдав запас ліміту flespi (ревʼю v74)
 const FAST_REFRESH_MS = 5000;       // прискорений поллінг у вікні щойно-виявленого глушіння
 const FAST_WINDOW_MS = 3 * 60000;   // швидкий режим тримаємо лише перші 3 хв глушіння — довше не варте зайвих запитів (регіональне глушіння в Сумах триває годинами)
@@ -1105,19 +1105,16 @@ function renderCards(devs, enrich) {
     // діагностика: акумулятор · звʼязок · супутники · простій
     const volt = vehVolt(tel), gsm = gsmInfo(tel), sats = satCount(tel);
     const diag = [];
-    if (volt != null) diag.push(`🔋 ${volt.toFixed(1)} В`);
-    else { const tb = trkBatt(tel); if (tb != null) diag.push(`🔋 ${Math.round(tb)}% (трекер)`); }
-    if (gsm) diag.push(`📶 ${gsm.label}`);
-    if (sats != null) diag.push(`🛰️ ${esc(sats)}`);
-    if (!active) diag.push(`🅿️ <span id="st_${d.id}">…</span>`);   // скільки стоїть (простій) — і для офлайн
+    if (volt != null) diag.push(`<span class="chip${volt < 12.3 ? ' warn' : ''}">🔋 ${volt.toFixed(1)} В</span>`);
+    else { const tb = trkBatt(tel); if (tb != null) diag.push(`<span class="chip">🔋 ${Math.round(tb)}% трекер</span>`); }
+    if (gsm) diag.push(`<span class="chip${/поган|нема/.test(gsm.label) ? ' bad' : ''}">📶 ${gsm.label}</span>`);
+    if (sats != null) diag.push(`<span class="chip${sats < 5 ? ' warn' : ''}">🛰️ ${esc(sats)}</span>`);
     // розрахунковий баланс SIM: постійно у діагностиці, а коли не вистачає на наступне списання — червона тривога
     const se = simEstimate(d.metadata);
     if (se) diag.push(se.low
-      ? `<span style="color:var(--red);font-weight:700">💳 SIM ≈${se.est} грн — поповни до 1-го числа!</span>`
-      : `💳 SIM ≈${se.est} грн`);
-    const diagHtml = diag.length
-      ? `<div style="display:flex;gap:14px;margin-top:8px;font-size:11px;color:var(--dim);flex-wrap:wrap">${diag.map(x=>`<span>${x}</span>`).join('')}</div>`
-      : '';
+      ? `<span class="chip bad">💳 SIM ≈${se.est} грн — поповни до 1-го!</span>`
+      : `<span class="chip">💳 SIM ≈${se.est} грн</span>`);
+    const diagHtml = diag.length ? `<div class="chips dim">${diag.join('')}</div>` : '';
     // де стоїть (адреса) — лише для незадіяних на звʼязку і лише за ТВЕРДИМ фіксом (не спуф, не 0 супутників)
     const showLoc = !active && fqC.solid;
     // GPS втрачено надовго. Трекер НЕ розрізняє «РЕБ» і «нема неба» (gnss.state.enum = AVL 69, див. gnssJamState),
@@ -1137,20 +1134,20 @@ function renderCards(devs, enrich) {
     const frozenC = frozenMs > 120000 && !!(posSeen[d.id] && posSeen[d.id].mv);   // той самий предикат, що в blindDrivingMs
     const sf = stuckFix[d.id];
     const locHtml = sf
-      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">🧊 Завис GPS-модуль: авто проїхало ${sf.km} км, а точка стоїть на місці — ${(Date.now() - (autoRebootAt[d.id] || 0) < 30*60000) ? 'перезавантаження надіслано о ' + fmtTime((autoRebootAt[d.id] || 0)/1000) : 'перезавантажу ввечері на стоянці'}</div>`
+      ? `<div class="note red">🧊 Завис GPS-модуль: авто проїхало ${sf.km} км, а точка стоїть на місці — ${(Date.now() - (autoRebootAt[d.id] || 0) < 30*60000) ? 'перезавантаження надіслано о ' + fmtTime((autoRebootAt[d.id] || 0)/1000) : 'перезавантажу ввечері на стоянці'}</div>`
       : (online && blindMs > 180000)
-      ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:700">${
+      ? `<div class="note red">${
           (fqC.solid && frozenC)
             ? `🧊 Завис GPS-модуль: авто ЇДЕ, а точка стоїть ${fmtDur(frozenMs/1000)} — ${rebootNote(d.id, blindMs)}`
             : `🚫 Авто ЇДЕ без GPS-фіксу вже ${fmtDur(Math.max(blindMs, jamMs)/1000)} — точка на карті застаріла${lbsFix(d, tel) ? lbsNote(lbsFix(d, tel)) : kmNote(kmSinceFix(d.id, tel))}`}</div>`
       : showLoc
-      ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 <span id="loc_${d.id}">…</span></div>`
+      ? `<div class="note loc">📍 <span id="loc_${d.id}">…</span></div>`
       : (jam === 2 ? (movingC
-          ? `<div style="margin-top:5px;font-size:11.5px;color:#e74c3c;font-weight:600">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла${lbsFix(d, tel) ? lbsNote(lbsFix(d, tel)) : kmNote(kmSinceFix(d.id, tel))}</div>`
-          : `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу вже ${fmtDur(jamMs/1000)}${lbsFix(d, tel) ? ' — стоїть приблизно за вежею звʼязку (' + accTxt(lbsFix(d, tel).acc || 1500) + ')' : ' (стоянка без неба / антена?)'}</div>`)
-      : (jam === 1 ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ Сумнівний GPS-фікс вже ${fmtDur(jamMs/1000)} (точка може бути хибна — можливий спуф)</div>`
-      : ((gpsLostLong && !gnssSleep) ? `<div style="margin-top:5px;font-size:11.5px;color:#f39c12;font-weight:600">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
-      : ((!active && lat != null && lon != null && !fqC.solid) ? `<div style="margin-top:5px;font-size:11.5px;color:var(--dim)">📍 нема GPS-фіксу${gnssSleep ? ' (GPS спить)' : ''}</div>` : ''))));
+          ? `<div class="note red">🚫 Нема GPS-фіксу вже ${fmtDur(jamMs/1000)} — авто їде, точка на карті застаріла${lbsFix(d, tel) ? lbsNote(lbsFix(d, tel)) : kmNote(kmSinceFix(d.id, tel))}</div>`
+          : `<div class="note loc">📍 нема GPS-фіксу вже ${fmtDur(jamMs/1000)}${lbsFix(d, tel) ? ' — стоїть приблизно за вежею звʼязку (' + accTxt(lbsFix(d, tel).acc || 1500) + ')' : ' (стоянка без неба / антена?)'}</div>`)
+      : (jam === 1 ? `<div class="note orange">⚠️ Сумнівний GPS-фікс вже ${fmtDur(jamMs/1000)} (точка може бути хибна — можливий спуф)</div>`
+      : ((gpsLostLong && !gnssSleep) ? `<div class="note orange">⚠️ GPS втрачено ${fmtDur(gpsLostMsC/1000)} тому — перевір антену</div>`
+      : ((!active && lat != null && lon != null && !fqC.solid) ? `<div class="note loc">📍 нема GPS-фіксу${gnssSleep ? ' (GPS спить)' : ''}</div>` : ''))));
     // тривога: помилки двигуна / перегрів — щоб проблемне авто було видно одразу
     const et = engineTemp(tel), dtc = dtcCount(tel);
     const alerts = [];
@@ -1159,46 +1156,55 @@ function renderCards(devs, enrich) {
     const fcA = faultsCache(d.id);
     if (!(dtc != null && dtc > 0) && fcA && fcA.ts && faultsBad(fcA.txt)) alerts.push('🛑 помилки двигуна (OBD)');
     if (et != null && et >= 110) alerts.push(`🌡️ перегрів ${Math.round(et)}°C`);
-    const alertHtml = alerts.length ? `<div style="margin-top:6px;font-size:12px;color:#e74c3c;font-weight:700">${alerts.join(' · ')}</div>` : '';
+    const alertHtml = alerts.length ? `<div class="note red">${alerts.join(' · ')}</div>` : '';
     // SIM-підозра: авто довго мовчить, тоді як ІНШІ на звʼязку (отже не РЕБ і не збій flespi, а саме ця сімка/покриття).
     // Баланс НАШИХ сімок дистанційно не читається (FMB003 не вміє USSD) — тому ловимо САМ ФАКТ смерті звʼязку і даємо поповнити в 1 тик.
     const md_ = d.metadata || {};
     const offMs = (!online && lastTs) ? (Date.now() - lastTs*1000) : null;
     const othersOnline = devs.some(o => o.id !== d.id && statusOnline(o.telemetry || {}));
     const simHtml = (offMs != null && offMs > SIM_SUSPECT_MS && othersOnline)
-      ? `<div style="margin-top:6px;font-size:12px;color:#e67e22;font-weight:700">📵 Звʼязку нема ${fmtDur(offMs/1000)} — перевір баланс SIM${md_.simPhone ? ` ${esc(md_.simPhone)} · <a href="https://oplata.lifecell.ua" target="_blank" rel="noopener" style="color:#3aa0ff">поповнити</a>` : ''}</div>`
+      ? `<div class="note orange">📵 Звʼязку нема ${fmtDur(offMs/1000)} — перевір баланс SIM${md_.simPhone ? ` ${esc(md_.simPhone)} · <a href="https://oplata.lifecell.ua" target="_blank" rel="noopener" style="color:#3aa0ff">поповнити</a>` : ''}</div>`
       : '';
     // до ТО + запас ходу (цінне для користувача — на видноті в картці)
     const sk = serviceKm(tel), rng = vehicleRange(d, tel);
     const infoArr = [];
-    if (sk != null) infoArr.push(`🔧 ${Math.round(sk).toLocaleString('uk-UA')} км до ТО`);
-    if (rng != null) infoArr.push(`🛣️ ${rng.toLocaleString('uk-UA')} км запас`);
-    const infoHtml = infoArr.length ? `<div style="margin-top:6px;font-size:12.5px;color:#c9d1d9">${infoArr.join('  ·  ')}</div>` : '';
+    if (sk != null) infoArr.push(`<span class="chip${sk < 1000 ? ' warn' : ''}">🔧 ТО через <b>${Math.round(sk).toLocaleString('uk-UA')}</b> км</span>`);
+    if (rng != null) infoArr.push(`<span class="chip${rng < 80 ? ' warn' : ''}">🛣️ запас <b>${rng.toLocaleString('uk-UA')}</b> км</span>`);
+    const infoHtml = infoArr.length ? `<div class="chips">${infoArr.join('')}</div>` : '';
 
     const card = document.createElement('div');
     card.className = 'card' + (active ? ' active' : '');
     // зелена підсвітка збоку, коли авто задіяне (двигун заведений)
-    card.style.borderLeft = active ? '4px solid #2ecc71' : '4px solid transparent';
-    card.style.boxShadow = active ? '0 0 0 1px rgba(46,204,113,.35), 0 0 14px rgba(46,204,113,.18)' : '';
+
     card.onclick = (e) => { if (e.target.closest && e.target.closest('a')) return; openDetail(d); };   // тап по «поповнити» — лише посилання, без деталей
-    const dotColor = active ? '#2ecc71' : (online ? '#8a929c' : '#454b54');
+    // VIP-вигляд (Іван 26.11): статус плашкою, три плитки з великими цифрами, решта — фішками й плашками
+    const tank = +(d.metadata || {}).tank || 0;
+    const pct = ev.soc != null ? ev.soc : (liters != null && tank ? liters / tank * 100 : null);
+    const lvl = pct == null ? '' : (pct < 20 ? 'lo' : (pct < 40 ? 'mid' : 'ok'));
+    const offline = !online && !active;
+    const pill = active ? '<span class="pill go">● В роботі</span>'
+               : (offline ? '<span class="pill off">● Нема звʼязку</span>' : '<span class="pill park">P Стоїть</span>');
+    const t3 = active
+      ? `<div class="tile"><div class="tv go">${spdTxt === 'працює' ? 'їде' : spdTxt}</div><div class="tk">зараз</div></div>`
+      : `<div class="tile"><div class="tv sm" id="st_${d.id}">…</div><div class="tk">простій</div></div>`;
+    const [fNum, fUnit] = String(fuelTxt).split(' ');
     card.innerHTML = `
       <div class="top">
-        <span class="dot" style="background:${dotColor};${active?'box-shadow:0 0 7px #2ecc71':''}"></span>
-        <span class="name">${esc(d.name)}</span>
-        <span class="badge" style="margin:0;${active?'color:#2ecc71':''}">${active?'🟢 в роботі':(lastTs?ago(lastTs):'')}</span>
+        <span class="name">${esc(d.name)}</span>${pill}
       </div>
-      <div class="grid">
-        <div class="cell"><div class="v fuel" id="fuel_${d.id}">${fuelTxt}</div><div class="l">${fuelLabel}</div></div>
-        <div class="cell"><div class="v" id="dm_${d.id}">…</div><div class="l">за сьогодні</div></div>
-        <div class="cell"><div class="v">${spdTxt}</div><div class="l">${odoTxt}</div></div>
-      </div>${infoHtml}${diagHtml}${locHtml}${alertHtml}${simHtml}`;
+      <div class="tiles">
+        <div class="tile fuel ${lvl}"><div class="tv" id="fuel_${d.id}">${esc(fNum)}${fUnit ? ` <small>${esc(fUnit)}</small>` : ''}</div><div class="tk">${fuelLabel}</div>
+          ${pct != null ? `<div class="bar"><i style="width:${Math.max(3, Math.min(100, pct)).toFixed(0)}%"></i></div>` : ''}</div>
+        <div class="tile"><div class="tv" id="dm_${d.id}">…</div><div class="tk">за сьогодні</div></div>
+        ${t3}
+      </div>${alertHtml}${simHtml}${locHtml}${infoHtml}${diagHtml}
+      <div class="foot"><span>${odoTxt === '—' ? '' : 'одометр ' + odoTxt}</span><span>${lastTs ? 'дані ' + ago(lastTs) : ''}</span></div>`;
     list.appendChild(card);
 
     if (!doEnrich) continue;   // знімок при відкритті: малюємо миттєво, історію тягнемо вже зі свіжими даними
     cardDayKm(d.id, startOfDay()).then(km => {
       const el = document.getElementById('dm_' + d.id);
-      if (el) el.textContent = (km != null ? km + ' км' : '—');
+      if (el) el.innerHTML = (km != null ? km + ' <small>км</small>' : '—');
     }).catch(()=>{ const el=document.getElementById('dm_'+d.id); if(el) el.textContent='—'; });
 
     // Якщо ПОТОЧНОГО рівня нема (авто заглушене) — освіжаємо «останнє паливо» з ІСТОРІЇ flespi (там правда),
@@ -1212,7 +1218,7 @@ function renderCards(devs, enrich) {
         try { localStorage.setItem('lastFuelTs', JSON.stringify(lastFuelTs)); } catch(e){}   // і throttle переживає перезапуск PWA
         lastValidFuel(d).then(l => {
           const el = document.getElementById('fuel_' + d.id);
-          if (el && l != null) el.textContent = l + ' л';
+          if (el && l != null) el.innerHTML = l + ' <small>л</small>';
         }).catch(()=>{});
       }
     }
@@ -1220,7 +1226,7 @@ function renderCards(devs, enrich) {
     if (!active) {
       standingText(d).then(txt => {
         const el = document.getElementById('st_' + d.id);
-        if (el) el.textContent = txt;
+        if (el) el.innerHTML = esc(txt).replace(/(\d+)\s*(дн|год|хв)\.?/g, '$1<small>$2</small>');   // VIP: цифри великі, одиниці дрібні
       }).catch(()=>{ const el=document.getElementById('st_'+d.id); if(el) el.textContent='—'; });
     }
     if (showLoc) {
@@ -1233,8 +1239,8 @@ function renderCards(devs, enrich) {
 
   // підсумок зверху: скільки в роботі / стоять / офлайн
   const sum = document.createElement('div');
-  sum.style.cssText = 'display:flex;gap:18px;justify-content:center;align-items:center;padding:9px 10px;margin-bottom:10px;font-size:13px;font-weight:600;background:rgba(255,255,255,.04);border-radius:10px';
-  sum.innerHTML = `<span style="color:#2ecc71">🟢 ${nActive} в роботі</span><span style="color:#a0a8b4">🅿️ ${nStopped} стоять</span>`;
+  sum.className = 'sumbar';
+  sum.innerHTML = `<div class="sb go"><b>${nActive}</b><span>в роботі</span></div><div class="sb"><b>${nStopped}</b><span>стоять</span></div>`;
   list.insertBefore(sum, list.firstChild);
   list.scrollTop = _st;   // повертаємо прокрутку — список не стрибає вгору при кожному оновленні
 }

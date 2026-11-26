@@ -98,6 +98,48 @@
   .cell .l { font-size:11px; color:var(--dim); margin-top:2px; }
   .cell .v.fuel { color:var(--accent); }
   .badge { font-size:11px; color:var(--dim); margin-top:8px; }
+  /* VIP-картка авто (Іван 26.11): назва — головне, статус плашкою, цифри плитками, решта фішками */
+  .card { padding:16px; }
+  .card.active { border-color:rgba(46,204,113,.55); box-shadow:0 0 0 1px rgba(46,204,113,.25), 0 6px 22px rgba(46,204,113,.10); }
+  .card .top { margin-bottom:12px; }
+  .card .name { font-size:18px; font-weight:800; letter-spacing:-.01em; line-height:1.2; }
+  .pill { flex:none; font-size:12px; font-weight:700; padding:5px 10px; border-radius:999px; white-space:nowrap; }
+  .pill.go { background:rgba(46,204,113,.16); color:#4be08a; }
+  .pill.park { background:rgba(138,160,184,.14); color:#b8c6d6; }
+  .pill.off { background:rgba(231,76,60,.16); color:#ff7a6b; }
+  .card .tiles { margin:0 0 4px; }
+  .card .tile { padding:12px 6px 10px; position:relative; }
+  .card .tile .tv { font-size:24px; }
+  .card .tile .tv.sm { font-size:21px; padding:1px 0; white-space:nowrap; }
+  .card .tile .tv.sm small { font-size:11px; margin:0 3px 0 1px; }
+  .card .tile .tv.go { color:#4be08a; font-size:20px; padding:2px 0 2px; }
+  .card .tile .tk { font-size:11px; margin-top:4px; }
+  .tile.fuel .tv { color:#5ab4ff; }
+  .tile.fuel.mid .tv { color:#f5c84c; }
+  .tile.fuel.lo .tv { color:#ff6b5b; }
+  .tile .bar { height:4px; border-radius:4px; background:rgba(255,255,255,.08); margin:8px 10px 0; overflow:hidden; }
+  .tile .bar i { display:block; height:100%; border-radius:4px; background:#3aa0ff; }
+  .tile.fuel.mid .bar i { background:#f1c40f; }
+  .tile.fuel.lo .bar i { background:#e74c3c; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .chip { font-size:12.5px; padding:5px 9px; border-radius:9px; background:var(--card2); color:#d5dee8; white-space:nowrap; }
+  .chip b { font-weight:800; color:#fff; }
+  .chips.dim .chip { font-size:11.5px; padding:4px 8px; color:var(--dim); background:rgba(255,255,255,.035); }
+  .chip.warn, .chips.dim .chip.warn { background:rgba(241,196,15,.14); color:#f5c84c; }
+  .chip.bad, .chips.dim .chip.bad { background:rgba(231,76,60,.16); color:#ff7a6b; font-weight:700; }
+  .note { margin-top:10px; font-size:13px; line-height:1.4; padding:9px 11px; border-radius:11px; font-weight:600; }
+  .note.red { background:rgba(231,76,60,.14); color:#ff8a7d; border-left:3px solid #e74c3c; }
+  .note.orange { background:rgba(243,156,18,.13); color:#f7b955; border-left:3px solid #f39c12; }
+  .note.loc { background:none; padding:0; color:#c3cfdc; font-weight:500; font-size:13px; }
+  .card .foot { display:flex; justify-content:space-between; margin-top:12px; padding-top:9px;
+    border-top:1px solid var(--line); font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .sumbar { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .sumbar .sb { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px 14px;
+    display:flex; align-items:baseline; gap:8px; }
+  .sumbar .sb b { font-size:26px; font-weight:800; color:#c3cfdc; font-variant-numeric:tabular-nums; }
+  .sumbar .sb span { font-size:13px; color:var(--dim); font-weight:600; }
+  .sumbar .sb.go { border-color:rgba(46,204,113,.4); }
+  .sumbar .sb.go b, .sumbar .sb.go span { color:#4be08a; }
 
   /* ДЕТАЛІ */
   #detail { position:fixed; inset:0; background:var(--bg); z-index:1000;
