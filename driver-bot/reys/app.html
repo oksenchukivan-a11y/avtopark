@@ -296,7 +296,9 @@ function vReasons(){
     <button class="btn blue left" data-a="none" data-r="acct"><span>💳 Скине на рахунок</span><span>›</span></button>
     <button class="btn left" data-a="none" data-r="mgr"><span>🤝 Домовилась з менеджером</span><span>›</span></button>
     <button class="btn left" data-a="none" data-r="nomoney"><span>⏳ Нема грошей</span><span>›</span></button>
-    <button class="btn left" data-a="none" data-r="closed"><span>🔒 Зачинено, нікого нема</span><span>›</span></button>`, [["back", "← Назад", "card"]]];
+    <button class="btn left" data-a="none" data-r="closed"><span>🔒 Зачинено, нікого нема</span><span>›</span></button>
+    <button class="btn left" data-a="none" data-r="atpoint"><span>📦 Залишив на точці</span><span>›</span></button>
+    <button class="btn left" data-a="none" data-r="other"><span>🤝 Залишив у іншого клієнта</span><span>›</span></button>`, [["back", "← Назад", "card"]]];
 }
 function vBlock(){
   const st = stop();
@@ -409,9 +411,9 @@ const A = {
   tick: d => { const k = +d.k; S.sel = S.sel.includes(k) ? S.sel.filter(x => x !== k) : S.sel.concat(k); updPick(); },
   savepick: () => { const typed = typedSum(); typed ? mark("amount", {sum:typed}) : mark("pick", {ks:S.sel}); },
   reasons: () => go("reasons"),
-  none: d => { const st = stop(); if (d.r === "nomoney" && st.debt > 0 && st.ride.length) return go("block"); mark("none", {reason:d.r}); },
-  left: () => mark("none", {reason:"nomoney", left:false}),
-  leftyes: () => mark("none", {reason:"nomoney", left:true}),
+  none: d => { const st = stop(); S.why = d.r; if (["nomoney","atpoint","other"].includes(d.r) && st.debt > 0 && st.ride.length) return go("block"); mark("none", {reason:d.r}); },
+  left: () => mark("none", {reason:S.why || "nomoney", left:false}),
+  leftyes: () => mark("none", {reason:S.why || "nomoney", left:true}),
   problem: () => go("problem"),
   pother: async () => { if (await api("other", {i:S.i, kind:S.kind})) { S.psel = {}; toast("Записано: інший товар"); go("card"); } },
   kind: async d => { S.kind = d.k; S.psel = {}; const j = await api("items", {i:S.i}); if (j) { S.items = j.items; go("items"); } },

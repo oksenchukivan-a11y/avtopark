@@ -26,8 +26,11 @@ def prefixes():
     return {k.strip().casefold(): v.strip() for k, _, v in (x.partition("=") for x in raw.split(",")) if k.strip() and v.strip()}
 
 
+ICONS = {"волосся": "💇‍♀️✂️", "манікюр": "💅"}     # рішення власника 27.11: напрямок картинкою, а не словом
+
+
 def mgr_view(name, people):
-    """Менеджер для кнопки дзвінка: «Манікюр Прізвище Ім'я» → підпис «Ім'я · манікюр»."""
+    """Менеджер для кнопки дзвінка: «Манікюр Прізвище Ім'я» → підпис «💅 Ім'я»."""
     name = e.clean(name)
     phone, direction = people.get(store.key(name), ("", ""))
     words = name.split()
@@ -36,8 +39,9 @@ def mgr_view(name, people):
         words = words[1:]                               # префікс-напрямок у підписі не повторюємо
     direction = direction or by_prefix
     short = (words[1] if len(words) > 1 else " ".join(words)) if direction else " ".join(words)
-    return {"name": name, "short": short, "dir": direction, "phone": phone or "",
-            "label": short + (f" · {direction}" if direction else "")}
+    icon = ICONS.get(direction.casefold(), "")
+    label = f"{icon} {short}" if icon else short + (f" · {direction}" if direction else "")
+    return {"name": name, "short": short, "dir": direction, "phone": phone or "", "label": label}
 
 
 def stop_view(st, i, people):

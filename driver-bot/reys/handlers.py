@@ -787,7 +787,11 @@ async def cb_reason(cb: CallbackQuery):
     if not run or st["status"]:
         return await cb.answer()
     reason = parts(cb)[3]
-    if reason == "nomoney" and engine.debt_due(st) > 0.5 and engine.riding(st):
+    if reason not in engine.REASONS:
+        return await cb.answer()
+    if reason in engine.LEAVE and engine.debt_due(st) > 0.5 and engine.riding(st):
+        st["why"] = reason                                   # щоб після дзвінка менеджеру записати саме цю причину
+        store.save(run_id, run)
         await cb.answer()
         return await show(cb, *ui.screen_block(st, i))      # боржник: спершу дзвінок менеджеру
     engine.mark_none(st, cb.from_user.id, reason, left=reason != "closed")
@@ -802,8 +806,10 @@ async def cb_block(cb: CallbackQuery):
     if not run or st["status"]:
         return await cb.answer()
     allowed = parts(cb)[1] == "al"
-    engine.mark_none(st, cb.from_user.id, "nomoney", left=allowed)
-    st["status"]["text"] = "нема грошей · " + ("менеджер дозволив залишити" if allowed else "товар не залишив")
+    reason = st.pop("why", "nomoney")
+    reason = reason if reason in engine.LEAVE else "nomoney"
+    engine.mark_none(st, cb.from_user.id, reason, left=allowed)
+    st["status"]["text"] = engine.REASONS[reason] + " · " + ("менеджер дозволив залишити" if allowed else "товар не залишив")
     store.log(run_id, cb.from_user.id, "debtor", stop=st["name"], manager=st["manager"], left=allowed)
     await cb.answer("Записано")
     await back_to_list(cb, run_id, run)

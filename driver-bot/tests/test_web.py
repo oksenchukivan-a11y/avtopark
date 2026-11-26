@@ -269,7 +269,7 @@ def test_two_managers_on_one_stop():
             store.set_direction("Оля", "манікюр")
             st = (await app.call("start", id="demo"))[1]["run"]["stops"][3]          # Барбершоп: дві накладні
             assert [(m["name"], m["label"], m["phone"]) for m in st["mgrs"]] == \
-                [("Іра", "Іра · волосся", "+380500000001"), ("Оля", "Оля · манікюр", "+380500000002")]
+                [("Іра", "💇‍♀️✂️ Іра", "+380500000001"), ("Оля", "💅 Оля", "+380500000002")]
             assert [(x["no"], x["mgr"], x["who"]) for x in st["ride"]] == [("1211", "Іра", "Іра"), ("1212", "Оля", "Оля")]
             items = (await app.call("items", i=3))[1]["items"]
             assert {(x["no"], x["mgr"]) for x in items} == {("1211", "Іра")}
@@ -296,7 +296,7 @@ def test_call_buttons_in_chat():
         tg.screen = 1001
         await tg.tap("r:demo")
         text, btns = tg.last_screen(await tg.tap("r:o:3"))                           # Іра без телефону, Оля з телефоном
-        assert "👤 Іра" in text and "👤 Оля · манікюр" in text and "r:cl:3:1" in btns and "r:cl:3:0" not in btns
+        assert "👤 Іра" in text and "👤 💅 Оля" in text and "r:cl:3:1" in btns and "r:cl:3:0" not in btns
         sent = await tg.tap("r:cl:3:1")
         assert [m.phone_number for m in sent if isinstance(m, SendContact)] == ["+380500000002"]
         text, btns = tg.last_screen(await tg.tap("r:o:0"))                           # телефону немає — одна кнопка-пояснення
@@ -315,11 +315,13 @@ def test_manager_names_as_written_in_1c():
     people = store.people()
     for raw in ("Манікюр Тестова Олена", "манікюр тестова олена ", "Манікюр  Тестова  Олена"):
         m = view.mgr_view(raw, people)
-        assert (m["label"].casefold(), m["phone"], m["name"]) == ("олена · манікюр", "+380500000009", " ".join(raw.split()))
-    assert view.mgr_view("Niceme Тестов Сергій ", people)["label"] == "Сергій · волосся"
+        assert (m["label"].casefold(), m["phone"], m["name"]) == ("💅 олена", "+380500000009", " ".join(raw.split()))
+    assert view.mgr_view("Niceme Тестов Сергій ", people)["label"] == "💇‍♀️✂️ Сергій"
+    store.set_direction("Тестова Ніна", "інше")                             # напрямок без картинки — словом, як раніше
+    assert view.mgr_view("Тестова Ніна", store.people())["label"] == "Ніна · інше"
     assert view.mgr_view("офис 1", people)["label"] == "офис 1" and view.mgr_view("Т.Т Місто", people)["label"] == "Т.Т Місто"
     store.set_direction("niceme тестов сергій", "манікюр")                  # таблиця перекриває префікс
-    assert view.mgr_view("Niceme Тестов Сергій", store.people())["label"] == "Сергій · манікюр"
+    assert view.mgr_view("Niceme Тестов Сергій", store.people())["label"] == "💅 Сергій"
     st = {"inv": [{"tags": [], "manager": "Манікюр Тестова  Олена"}, {"tags": [], "manager": "Манікюр Тестова Олена "}],
           "debts": [{"sum": 50, "manager": "Niceme Тестов Сергій "}], "sheet_debt": 50, "manager": ""}
     assert engine.managers(st) == ["Манікюр Тестова Олена", "Niceme Тестов Сергій"]     # той самий — один раз

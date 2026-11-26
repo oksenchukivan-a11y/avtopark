@@ -268,12 +268,12 @@ async def a_none(uid, a):
     reason, left = a.get("reason"), a.get("left")
     if reason not in engine.REASONS:
         raise Bad("Вибери причину")
-    debtor = reason == "nomoney" and engine.debt_due(st) > 0.5 and bool(engine.riding(st))
+    debtor = reason in engine.LEAVE and engine.debt_due(st) > 0.5 and bool(engine.riding(st))
     if debtor:
         if not isinstance(left, bool):
             raise Bad("У клієнта борг: спершу набери менеджера")
         engine.mark_none(st, uid, reason, left=left)
-        st["status"]["text"] = "нема грошей · " + ("менеджер дозволив залишити" if left else "товар не залишив")
+        st["status"]["text"] = engine.REASONS[reason] + " · " + ("менеджер дозволив залишити" if left else "товар не залишив")
         store.log(run_id, uid, "debtor", stop=st["name"], manager=", ".join(engine.debt_managers(st)), left=left)
     else:
         engine.mark_none(st, uid, reason, left=reason != "closed")
