@@ -28,6 +28,8 @@ def init():
         CREATE TABLE IF NOT EXISTS reys_people(tg_id INTEGER PRIMARY KEY, name TEXT, seen TEXT);
         CREATE TABLE IF NOT EXISTS reys_screen(tg_id INTEGER PRIMARY KEY, chat_id INTEGER, msg_id INTEGER);
         """)
+        if "fixed" not in {r["name"] for r in c.execute("PRAGMA table_info(reys_people)")}:
+            c.execute("ALTER TABLE reys_people ADD COLUMN fixed INTEGER DEFAULT 0")
         _rekey(c, "reys_phones", "phone")
         _rekey(c, "reys_dirs", "dir")
 
@@ -176,8 +178,16 @@ def taken_by(sheet_ref, not_uid):
 def saw(tg_id, name):
     """Запам'ятовує ім'я людини з Telegram — щоб власник закріплював путівку за іменем, а не за номером."""
     with db() as c:
-        c.execute("INSERT INTO reys_people(tg_id, name, seen) VALUES(?,?,?) ON CONFLICT(tg_id) "
-                  "DO UPDATE SET name=excluded.name, seen=excluded.seen", (tg_id, name or str(tg_id), now()))
+        c.execute("INSERT INTO reys_people(tg_id, name, seen) VALUES(?,?,?) ON CONFLICT(tg_id) DO UPDATE SET "
+                  "name=CASE WHEN reys_people.fixed=1 THEN reys_people.name ELSE excluded.name END, seen=excluded.seen",
+                  (tg_id, name or str(tg_id), now()))
+
+
+def set_name(tg_id, name):
+    """Ім'я водія, як його знає бот. Воно важливіше за те, як людина назвала себе в Telegram."""
+    with db() as c:
+        c.execute("INSERT INTO reys_people(tg_id, name, fixed) VALUES(?,?,1) ON CONFLICT(tg_id) "
+                  "DO UPDATE SET name=excluded.name, fixed=1", (int(tg_id), str(name)))
 
 
 def known_people():

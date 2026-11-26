@@ -89,8 +89,9 @@ def sent(msg):
     return msg
 
 
-def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None):
-    """Викликати один раз у main() ПЕРЕД підключенням основного роутера бота."""
+def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, people=None):
+    """Викликати один раз у main() ПЕРЕД підключенням основного роутера бота.
+    people — необов'язковий словник {tg_id: ім'я водія}, щоб власник бачив імена, а не номери."""
     global ON_SENT, ON_ACT
     ON_SENT, ON_ACT = on_sent, on_act
     from . import web                       # тут, а не вгорі: web сам користується цим файлом
@@ -104,6 +105,8 @@ def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None):
     TESTERS.clear()
     TESTERS.update(ids)
     store.init()
+    for tg_id, name in (people or {}).items():
+        store.set_name(tg_id, name)
     router.message.filter(F.from_user.id.in_(TESTERS))
     router.callback_query.filter(F.from_user.id.in_(TESTERS))
     dp.include_router(router)

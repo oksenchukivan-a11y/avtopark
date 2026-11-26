@@ -126,6 +126,9 @@ def test_full_run_through_app():
             await app.call("expense", sum=100, kind="Інше")
             j = (await app.call("expense_del", k=1))[1]
             assert j["run"]["totals"]["spent"] == 683.5
+            rid, real = store.open_run(ME)                                           # навчальний рейс не звітує — робимо його справжнім
+            real.pop("demo")
+            store.save(rid, real)
             before = len(app.tg.session.sent)
             code, j = await app.call("close")
             assert j["ok"] and j["run"] is None and j["done"]["hand"] == round(1501 + 2500 + 380 - 683.5, 2)
@@ -531,4 +534,30 @@ def test_every_app_request_reaches_the_guard():
             finally:
                 handlers.ON_ACT = None
                 web.HITS.clear()
+    asyncio.run(go())
+
+
+def test_closed_real_run_reaches_someone():
+    """Рейс відкрито водіям: підсумок справжнього рейсу не має загубитись. Касира немає — отримує власник."""
+    async def go():
+        async with Drivers() as app:
+            store.set_name(333, "Водій Перший")
+            await app.call("state", who=333)                                   # ім'я з Telegram бота не перебиває
+            assert store.known_people()[333] == "Водій Перший"
+            await app.call("assign", id="1c:" + SHEET, to=333)
+            run = (await app.call("start", who=333, id="1c:" + SHEET))[1]["run"]
+            for s in run["stops"]:
+                if s["where"] == "route":
+                    await app.call("all" if s["due"] > 0 else "given", who=333, i=s["i"])
+            before = len(app.tg.session.sent)
+            assert (await app.call("close", who=333))[1]["ok"]
+            got = [m for m in app.tg.session.sent[before:] if isinstance(m, SendMessage)]
+            assert [m.chat_id for m in got] == [ME] and "Водій Перший" in got[0].text and "здано" in got[0].text
+            await app.call("start", who=333, id="demo")                        # навчальний — нікому
+            for s in (await app.call("state", who=333))[1]["run"]["stops"]:
+                if s["where"] == "route":
+                    await app.call("all" if s["due"] > 0 else "given", who=333, i=s["i"])
+            before = len(app.tg.session.sent)
+            await app.call("close", who=333)
+            assert not [m for m in app.tg.session.sent[before:] if isinstance(m, SendMessage)]
     asyncio.run(go())

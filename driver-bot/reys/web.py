@@ -387,11 +387,16 @@ async def after_close(uid, run, who):
         except Exception as e:                      # повідомлення могли стерти руками — це не біда
             log.info("reys: кнопку рейсу не прибрано: %s", e)
         store.set_screen(uid, None, None)
-    for cid in hd.ids_from_env("REYS_CASHIER"):
+    if run.get("demo"):                              # навчальний рейс нікому не звітує
+        return
+    # Підсумок справжнього рейсу має хтось отримати. Касира не вписано — отримує власник.
+    to = hd.ids_from_env("REYS_CASHIER") or ({hd.ADMIN} if hd.ADMIN else set())
+    name = store.known_people().get(uid) or who
+    for cid in to - {uid}:
         try:
-            await bot.send_message(cid, ui.report(run, who), parse_mode="HTML")
+            await bot.send_message(cid, ui.report(run, name), parse_mode="HTML")
         except Exception as e:
-            log.warning("reys: підсумок касиру %s не надіслано: %s", cid, e)
+            log.warning("reys: підсумок рейсу %s не надіслано: %s", cid, e)
 
 
 ACTIONS = {"state": a_state, "menu": a_menu, "start": a_start, "assign": a_assign, "open": a_open,
