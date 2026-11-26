@@ -338,10 +338,18 @@ async def cmd_tel(m: Message, command: CommandObject):
     parts = (command.args or "").rsplit(" ", 1)
     digits = "".join(ch for ch in parts[-1] if ch.isdigit()) if len(parts) == 2 else ""
     if len(digits) < 10:
-        await m.answer("Приклад: /reys_tel Петренко Олена 0501234567\nІм'я — як у 1С, у картці точки.")
-        return
+        return await note(m, "Приклад: /reys_tel Петренко Олена 0501234567\nІм'я — як у 1С, у картці точки.")
     store.set_phone(parts[0].strip(), "+38" + digits[-10:])
-    await m.answer(f"Записав: {parts[0].strip()} — +38{digits[-10:]}")
+    await note(m, f"Записав: {parts[0].strip()} — +38{digits[-10:]}")
+
+
+async def note(m: Message, text: str):
+    """Службова відповідь власникові, яка не лишається в стрічці: команду стираємо, відповідь зникає після «Зрозуміло»."""
+    try:
+        await m.delete()
+    except TelegramBadRequest:
+        pass
+    await m.answer(text, reply_markup=markup([[("Зрозуміло", "r:ph:x")]]))
 
 
 # ---------- телефони менеджерів без набору з клавіатури ----------
@@ -407,9 +415,9 @@ async def cmd_dir(m: Message, command: CommandObject):
         people = store.people()
         rows = [f"{v['name']} — {v['dir'] or 'напрямок не задано'}{'' if v['phone'] else ' · телефону немає'}"
                 for v in (ui.mgr_view(n, people) for n in manager_names())]
-        return await m.answer("Приклад: /reys_dir Петренко Олена = волосся\n\n" + "\n".join(rows))
+        return await note(m, "Приклад: /reys_dir Петренко Олена = волосся\n\n" + "\n".join(rows))
     store.set_direction(name, value)
-    await m.answer(f"Записав: {name} — {value or 'без напрямку'}")
+    await note(m, f"Записав: {name} — {value or 'без напрямку'}")
 
 
 async def ctx(cb: CallbackQuery):

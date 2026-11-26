@@ -377,3 +377,20 @@ def test_card_shows_invoice_sum_and_total_after_return():
         assert "№ 1204 · 1 501 ₴" in text and "(−370 ₴)" in text and "Після повернення: 1 131 ₴" in text
         assert "1 131 ₴ до збору" in text
     asyncio.run(go())
+
+
+def test_service_replies_do_not_stay_in_chat():
+    """Чиста стрічка: службова команда стирається, відповідь зникає після «Зрозуміло»."""
+    from test_flow import Tg
+
+    async def go():
+        tg = Tg()
+        for cmd in ("/reys_tel Тестова Олена 0501112233", "/reys_tel", "/reys_dir Тестова Олена = волосся", "/reys_dir"):
+            sent, _ = await tg.text(cmd)
+            ans = [m for m in sent if isinstance(m, SendMessage)][-1]
+            assert any(isinstance(m, DeleteMessage) for m in sent), cmd
+            assert [b.callback_data for row in ans.reply_markup.inline_keyboard for b in row] == ["r:ph:x"], cmd
+        tg.screen = 3000
+        assert any(isinstance(m, DeleteMessage) for m in await tg.tap("r:ph:x"))
+        assert store.phone("тестова  олена") == "+380501112233" and store.direction("Тестова Олена") == "волосся"
+    asyncio.run(go())
