@@ -2,7 +2,7 @@
 import os
 
 from . import engine as e
-from . import store
+from . import store, tail
 from .tags import LABELS, driver_comment
 
 SKIP_WHY = {"SV": "самовивіз", "NP": "Нова пошта", "DATE": "доставка в інший день"}
@@ -68,7 +68,8 @@ def stop_view(st, i, people):
         "comments": comments, "flags": [LABELS[t] for t in flags], "free": free,
         "due": e.due(st), "today": e.today_due(st), "debt": e.debt_due(st),
         "ride": [{"ref": x["ref"], "no": x["no"], "sum": x["sum"], "orig": e.orig_sum(st, x), "bo": "BO" in x["tags"],
-                  "mgr": e.clean(x.get("manager", "")), "who": mgr_view(x.get("manager", ""), people)["short"] if many else ""} for x in ride],
+                  "mgr": e.clean(x.get("manager", "")), "who": mgr_view(x.get("manager", ""), people)["short"] if many else "", "tail": tail.label(x)} for x in ride],
+        "tails": sorted({tail.label(x) for x in ride if x.get("tail")}),      # звідки накладна, якої не було в путівці
         "after": round(sum(x["sum"] for x in ride), 2) if e.has_cuts(st) else None,   # «після повернення»
         "wait": wait,
         "debts": [{"name": _debt_name(d), "sum": d["sum"], "mgr": e.clean(d.get("manager", "")),

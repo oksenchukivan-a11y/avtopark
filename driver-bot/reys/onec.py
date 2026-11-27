@@ -66,10 +66,11 @@ def chunks(seq, n=30):
         yield seq[i:i + n]
 
 
-async def by_keys(obj: str, keys, select: str, field: str = "Ref_Key", extra: str = ""):
-    """Читає записи за списком ключів порціями, щоб адреса запиту не була задовгою."""
+async def by_keys(obj: str, keys, select: str, field: str = "Ref_Key", extra: str = "", n: int = 30):
+    """Читає записи за списком ключів порціями, щоб адреса запиту не була задовгою.
+    n — скільки ключів за раз: менше, коли записи важкі (накладні з рядками товарів)."""
     out = []
-    for part in chunks(sorted(set(k for k in keys if k and k != ZERO))):
+    for part in chunks(sorted(set(k for k in keys if k and k != ZERO)), n):
         flt = f"({guid_filter(field, part)})" + (f" and {extra}" if extra else "")
         out += await call("query", object=obj, filter=flt, select=select, top=1000)
     return out

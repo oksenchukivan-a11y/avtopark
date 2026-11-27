@@ -93,6 +93,7 @@ input.sum:focus{outline:none;border-color:var(--accent)}
 .chip{padding:12px 16px;border-radius:999px;border:2px solid var(--line);background:var(--surface);font:inherit;font-weight:700;color:var(--ink)}
 .chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .chip.dim{opacity:.45}
+.tailchip{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--bank-soft);color:var(--bank);font-weight:700;font-size:13px}
 textarea.note{width:100%;margin-top:10px;border-radius:14px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font:500 17px system-ui;padding:12px}
 .btn.mini{min-height:52px;padding:8px 10px;font-size:15px;line-height:1.25}
 .linkish{display:block;background:none;border:0;padding:0;text-align:left;font:inherit;text-decoration:underline dotted}
@@ -205,6 +206,7 @@ function rowHtml(st){
   if (st.debt > 0) sub.push(`<span class="red">🔴 борг ${money(st.debt)}</span>`);
   if (st.free && st.due > 0) sub.push(`<span class="nopay">без оплати</span>`);   // на папері це червона ручка — тут жовта плашка; якщо боргу немає, вона вже стоїть праворуч
   if (st.flags.length) sub.push("❗ " + esc(st.flags.join(", ")));
+  (st.tails || []).forEach(t => sub.push(`<span class="tailchip">${esc(t)}</span>`));    // не з путівки: перенесено, після друку, терміново
   if (st.addr) sub.push(esc(st.addr));
   const right = st.free && st.due <= 0 ? `<span class="nopay">без оплати</span>` : money(st.due);
   return `<div class="row"><button class="main${st.debt > 0 ? " debt" : ""}" data-a="open" data-i="${st.i}">
@@ -253,7 +255,7 @@ function vCard(){
     <div class="calls">${st.phones.length ? `<a class="btn go" ${telAttrs(st.phones[0])}>📞 Салон</a>` : `<span class="btn" style="opacity:.4">📞 Салон</span>`}
     ${mgrBtns(st) || `<button class="btn nophone" data-a="nophone" data-n="">📞 Менеджер</button>`}</div></div>`;
   if (st.ride.length) h += `<div class="card"><b class="h">📦 Сьогодні${st.free ? ` <span class="nopay">без оплати</span>` : ""}</b>
-    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.who ? ` · <span class="muted">${esc(x.who)}</span>` : ""}${x.bo && !st.free ? ` <span class="nopay">без оплати</span>` : ""}</span><span>${money(x.orig ?? x.sum)}</span></div>`).join("")}
+    ${st.ride.map(x => `<div class="line"><span>№ ${esc(x.no)}${x.who ? ` · <span class="muted">${esc(x.who)}</span>` : ""}${x.bo && !st.free ? ` <span class="nopay">без оплати</span>` : ""}${x.tail ? ` <span class="tailchip">${esc(x.tail)}</span>` : ""}</span><span>${money(x.orig ?? x.sum)}</span></div>`).join("")}
     ${st.probs.map(p => `<div class="line"><span>⚠️ ${esc(p.text)}</span><span class="red">${p.cut ? "−" + money(p.cut) : ""}</span></div>`).join("")}
     ${st.after != null ? `<div class="line total"><b>💰 Після повернення</b><span>${money(st.after)}</span></div>` : ""}</div>`;
   if (st.wait.length) h += `<div class="card wait"><b class="h">⏸ Не їде сьогодні</b>${st.wait.map(w => `<div class="line"><span>№ ${esc(w.no)} · ${esc(w.why)} ${esc(w.when)}</span><span>${money(w.sum)}</span></div>`).join("")}</div>`;

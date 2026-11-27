@@ -13,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, ErrorEvent, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
-from . import build, daily, engine, onec, store, ui
+from . import build, daily, engine, onec, store, tail, ui
 
 log = logging.getLogger("reys")
 TZ = ZoneInfo("Europe/Kyiv")
@@ -140,6 +140,7 @@ def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, p
     from . import wh_report
     wh_report.init()
     daily.init()
+    tail.init()
     daily.VEHICLES = {str(k): str(v) for k, v in (vehicles or {}).items()}
     daily.KM_FOR, daily.TO_REPORTS, daily.ON_PHOTO, daily.PARCELS = km_for, to_reports, on_damage_photo, expected_parcels
     for tg_id, name in (people or {}).items():
@@ -292,6 +293,20 @@ async def sheet_label(stub):
 
 
 async def load_run(ref: str):
+    """Рейс із путівки. Для міської, коли ввімкнено «хвіст дня», — ще й те, чого в путівці немає, а везти треба."""
+    run, printed, ride = await load_sheet(ref)
+    if tail.enabled() and tail.is_city(run.get("where")):
+        try:
+            added = await tail.extend(run, printed, ride, ignore=trial_ids())
+            if added:
+                await load_phones(run)                           # у доданих точок теж мають бути телефони
+        except Exception:
+            log.exception("reys: хвіст дня не зібрано — рейс відкривається як у путівці")
+    return run
+
+
+async def load_sheet(ref: str, light: bool = False):
+    """Путівка з 1С як є: (рейс, коли надруковано, день рейсу). light — без телефонів і менеджерів клієнта."""
     rows = await onec.call("query", object="Document_ПутевойЛист", filter=f"Ref_Key eq guid'{ref}'",
                            select="Ref_Key,Number,Date,Контрагенты", top=1)
     if not rows:
@@ -315,12 +330,14 @@ async def load_run(ref: str):
     where = build.direction([r.get("ДополнительноеОписание", "") for r in cards if r["Ref_Key"] in with_inv])
     ride = build.ride_day(day, where)                            # вечірню обласну везуть наступного дня
     run = build.build_run(sheet, invoices, names, agents, orders, day=ride)
+    run["where"] = where
     if where:                                                    # у шапці рейсу — куди їдемо, а не номер
         run["title"] = f"{where} · {ride:%d.%m}"
     AGENTS.update(agents)
-    await load_phones(run)
-    await load_recent_managers(run, day)
-    return run
+    if not light:
+        await load_phones(run)
+        await load_recent_managers(run, day)
+    return run, day, ride
 
 
 AGENTS: dict = {}            # ключ менеджера в 1С → ім'я; наповнюється під час роботи

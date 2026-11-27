@@ -168,7 +168,7 @@ async def pieces(run):
         minus += sum(p.get("qty") or 0 for p in s.get("probs", []) if p["kind"] in ("miss", "refuse"))
     if not refs or not onec.configured():
         return None
-    docs = await onec.by_keys(REAL, refs, "Ref_Key,Товары")
+    docs = await onec.by_keys(REAL, refs, "Ref_Key,Товары", n=8)   # накладні з рядками важкі: по 30 1С обрізає відповідь
     total = sum(x.get("Количество") or 0 for d in docs for x in d.get("Товары") or [])
     return max(0.0, round(total - minus, 2))
 

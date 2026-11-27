@@ -16,12 +16,12 @@ from urllib.parse import parse_qsl
 
 from aiohttp import web
 
-from . import build, daily, engine, onec, store, ui, view
+from . import build, daily, engine, onec, store, tail, ui, view
 from . import handlers as hd
 
 log = logging.getLogger("reys.web")
 MAX_AGE = 36 * 3600          # застосунок можуть тримати відкритим увесь рейс
-STATE = {"bot": None, "runner": None, "secret": b""}
+STATE = {"bot": None, "runner": None, "secret": b"", "tail": None}
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.html")
 
 
@@ -545,6 +545,13 @@ async def after_close(uid, run, who):
             log.warning("reys: звіт складу не зібрано: %s", ex)
     if run.get("demo"):                              # навчальний рейс нікому не звітує
         return
+    if tail.enabled() and run.get("tailable") and hd.ADMIN and uid not in hd.trial_ids():
+        try:                                         # що з міських накладних дня лишилось на складі
+            left = await tail.left_behind(run, ignore=hd.trial_ids())
+            if left:
+                hd.sent(await bot.send_message(hd.ADMIN, left, parse_mode="HTML"))
+        except Exception as e:
+            log.warning("reys: звірка складу не надіслана: %s", e)
     # Підсумок справжнього рейсу має хтось отримати. Касира не вписано — отримує власник.
     to = hd.ids_from_env("REYS_CASHIER") or ({hd.ADMIN} if hd.ADMIN else set())
     for cid in to - {uid}:
@@ -658,6 +665,8 @@ async def start(bot):
         host, port = os.environ.get("REYS_WEB_HOST", "127.0.0.1"), int(os.environ.get("REYS_WEB_PORT", "8087"))
         await web.TCPSite(runner, host, port).start()
         STATE["runner"] = runner
+        if tail.enabled() and not STATE["tail"]:               # дозамовлення в місто, поки рейс відкритий
+            STATE["tail"] = asyncio.get_running_loop().create_task(tail.watch(bot))
         log.info("reys: застосунок слухає %s:%s (%s)", host, port, datetime.now().isoformat(timespec="seconds"))
     except Exception:
         log.exception("reys: застосунок не запустився — рейс працює кнопками в чаті")
@@ -669,6 +678,9 @@ async def start(bot):
 
 
 async def stop():
+    task, STATE["tail"] = STATE["tail"], None
+    if task:
+        task.cancel()
     runner, STATE["runner"] = STATE["runner"], None
     if runner:
         try:
