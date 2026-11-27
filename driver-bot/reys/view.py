@@ -96,7 +96,7 @@ def run_view(run):
     team = [] if run.get("demo") or run.get("snap") else store.crew(run.get("sheet_ref", ""))
     return {"title": title, "demo": bool(run.get("demo")), "closed": bool(run.get("closed")),
             "crew": [names.get(t, str(t)) for t in team], "ver": run.get("_ver", 0),
-            "vehicles": run.get("vehicles") or [],
+            "vehicles": run.get("vehicles") or [], "post": run.get("post") or None,
             "stops": stops, "order": order, "left_sum": left, "totals": t,
             "expenses": [{"kind": x["kind"], "sum": x["sum"]} for x in run["expenses"]],
             "reasons": e.REASONS, "problems": e.PROBLEMS, "other_kinds": list(e.OTHER_KINDS)}

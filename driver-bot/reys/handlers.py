@@ -117,12 +117,13 @@ def sent(msg):
 
 
 def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, people=None,
-          vehicles=None, km_for=None, to_reports=None, on_damage_photo=None):
+          vehicles=None, km_for=None, to_reports=None, on_damage_photo=None, expected_parcels=None):
     """Викликати один раз у main() ПЕРЕД підключенням основного роутера бота.
     people — необов'язковий словник {tg_id: ім'я водія}, щоб власник бачив імена, а не номери.
     vehicles — {код авто: назва}: з ним у рейсі з'являється «Звіт за день» (авто, ящики, пошта, стан авто).
     km_for(коди, день) → (км, деталі) або None; to_reports(рядок) — запис у старий звіт (лише з REYS_TO_REPORTS=1);
-    on_damage_photo(bot, tg_id, file_id, авто, опис) — що бот робить із фото пошкодження."""
+    on_damage_photo(bot, tg_id, file_id, авто, опис) — що бот робить із фото пошкодження;
+    expected_parcels(день) → [{supplier, ttn, places}] — посилки, які мають прийти (підказка водієві)."""
     global ON_SENT, ON_ACT
     ON_SENT, ON_ACT = on_sent, on_act
     from . import web                       # тут, а не вгорі: web сам користується цим файлом
@@ -140,7 +141,7 @@ def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, p
     wh_report.init()
     daily.init()
     daily.VEHICLES = {str(k): str(v) for k, v in (vehicles or {}).items()}
-    daily.KM_FOR, daily.TO_REPORTS, daily.ON_PHOTO = km_for, to_reports, on_damage_photo
+    daily.KM_FOR, daily.TO_REPORTS, daily.ON_PHOTO, daily.PARCELS = km_for, to_reports, on_damage_photo, expected_parcels
     for tg_id, name in (people or {}).items():
         store.set_name(tg_id, name)
     router.message.filter(F.from_user.id.in_(TESTERS))

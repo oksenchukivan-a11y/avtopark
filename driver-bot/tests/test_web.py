@@ -995,12 +995,28 @@ def test_day_report_is_filled_at_cash_handover_and_split_for_crew():
                 assert j["cfg"]["daily"] and [v["code"] for v in j["cfg"]["vehicles"]] == list(CARS) and j["run"]["vehicles"] == []
                 assert not (await app.call("vehicle", who=333, codes=["ZZ0000ZZ"]))[1]["ok"]         # не з нашого парку
                 assert not (await app.call("vehicle", who=333, codes=[]))[1]["ok"]
-                j = (await app.call("vehicle", who=444, codes=["AA1111AA"]))[1]                      # авто одне на екіпаж
-                assert j["ok"] and (await app.call("state", who=333))[1]["run"]["vehicles"] == ["AA1111AA"]
+                assert not (await app.call("vehicle", who=333, codes=["AA1111AA", "AA1111AA"]))[1]["ok"]
+                j = (await app.call("vehicle", who=444, codes=["BB2222BB"]))[1]                      # авто одне на екіпаж
+                assert j["ok"] and (await app.call("state", who=333))[1]["run"]["vehicles"] == ["BB2222BB"]
+                # пересіли посеред дня: авто додається в порядку поїздки, кожна зміна — в журнал
+                assert (await app.call("vehicle", who=333, codes=["BB2222BB", "AA1111AA"]))[1]["run"]["vehicles"] == ["BB2222BB", "AA1111AA"]
+                assert (await app.call("vehicle", who=333, codes=["BB2222BB", "AA1111AA"]))[1]["ok"]  # те саме вдруге — без події
+                # пошта — будь-коли й двома числами; останнє введення чинне
+                assert not (await app.call("post", who=333, sent="багато", received=1))[1]["ok"]
+                assert (await app.call("post", who=333, sent=0, received=2))[1]["run"]["post"] == {"sent": 0, "received": 2}
+                assert (await app.call("post", who=444, sent=1, received=2))[1]["run"]["post"] == {"sent": 1, "received": 2}
+                daily.PARCELS = lambda day: [{"supplier": "Постачальник", "ttn": "2045", "places": 3}, "сміття"]
+                assert (await app.call("parcels", who=333))[1]["parcels"] == [{"supplier": "Постачальник", "ttn": "2045", "places": 3}]
+                daily.PARCELS = lambda day: 1 / 0                                                     # джерело впало — пошта працює
+                assert (await app.call("parcels", who=333))[1]["parcels"] == []
+                with store.db() as c:
+                    ev = [(r["action"], r["tg_id"]) for r in c.execute("SELECT action, tg_id FROM reys_events WHERE action IN ('vehicle','post') ORDER BY id")]
+                assert ev == [("vehicle", 444), ("vehicle", 333), ("post", 333), ("post", 444)]
                 await mark_all(app, 333)
-                ok_day = {"boxes": "7", "post": "3", "ok": False, "desc": "подряпина на бампері"}
+                ok_day = {"boxes": "7", "received": "3", "ok": False, "car": "AA1111AA", "desc": "подряпина на бампері"}   # отримав виправив на закритті
                 for bad, word in (({}, "ящик"), (dict(ok_day, boxes="абв"), "число"), (dict(ok_day, boxes="-2"), "число"),
-                                  (dict(ok_day, ok=None), "порядку"), (dict(ok_day, desc=" "), "Опиши")):
+                                  (dict(ok_day, ok=None), "порядку"), (dict(ok_day, desc=" "), "Опиши"),
+                                  (dict(ok_day, car=""), "Яке авто"), (dict(ok_day, sent="x"), "число")):
                     j = (await app.call("close", who=444, daily=bad))[1]
                     assert not j["ok"] and word in j["msg"] and j["run"], (bad, j["msg"])           # рейс лишається відкритим
                 before = len(app.tg.session.sent)
@@ -1009,11 +1025,11 @@ def test_day_report_is_filled_at_cash_handover_and_split_for_crew():
                 rows = daily.rows(run_id=1)
                 assert [(r["tg_id"], r["km_owner"]) for r in rows] == [(333, 1), (444, 0)]
                 for r in rows:
-                    assert (r["boxes"], r["boxes_received"], r["boxes_sent"], r["share"]) == (3.5, 1.5, 0, 0.5)
+                    assert (r["boxes"], r["boxes_received"], r["boxes_sent"], r["share"]) == (3.5, 1.5, 0.5, 0.5)
                     assert r["points"] * 2 == r["full_points"] == 5 and r["full_boxes"] == 7
                     assert (r["vehicle"], r["vehicle_ok"], r["damage_vehicle"], r["damage_desc"]) == \
-                        ("AA1111AA", 0, "AA1111AA", "подряпина на бампері")
-                    assert r["km"] == 87 and json.loads(r["km_detail"])["AA1111AA"]["src"] == "gps"
+                        ("BB2222BB,AA1111AA", 0, "AA1111AA", "подряпина на бампері")              # авто — у порядку поїздки
+                    assert r["km"] == 87 and list(json.loads(r["km_detail"])) == ["BB2222BB", "AA1111AA"]
                     assert r["route"] and r["test"] == 0 and r["src"] == "reys" and r["sent"] == 0 and r["hours_fact"] is not None
                 assert sum(r["km"] for r in rows if r["km_owner"]) == 87                               # км один раз на авто
                 assert sent_rows == []                                                                 # у старий звіт — ні, прапорець вимкнено
@@ -1038,7 +1054,7 @@ def test_day_report_is_filled_at_cash_handover_and_split_for_crew():
                 await daily.drain()
                 assert len(sent_rows) == 1 and (sent_rows[0]["tg_id"], sent_rows[0]["boxes"], sent_rows[0]["share"],
                                                 sent_rows[0]["vehicle"], sent_rows[0]["boxes_received"]) == \
-                    (333, 12, 1.0, "AA1111AA,BB2222BB", 0)
+                    (333, 12, 1.0, "BB2222BB,AA1111AA", 0)
                 assert [r["sent"] for r in daily.rows(run_id=2)] == [1]
                 await app.call("start", id="demo")                                                     # власник пробує сам
                 await app.call("vehicle", codes=["AA1111AA"])

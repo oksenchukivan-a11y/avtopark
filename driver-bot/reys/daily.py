@@ -18,6 +18,7 @@ VEHICLES: dict = {}          # {код авто: назва} — дає бот �
 KM_FOR = None                # функція бота: (коди авто, день) → (км, деталі) або None
 TO_REPORTS = None            # функція бота: (рядок-словник) — запис у таблицю старого звіту
 ON_PHOTO = None              # функція бота: (bot, tg_id, file_id, авто, опис) — фото пошкодження
+PARCELS = None               # функція бота: (день) → [{supplier, ttn, places}] — посилки, які мають прийти поштою
 TASKS: set = set()
 REAL = "Document_РеализацияТоваровУслуг"
 FIELDS = ("run_id", "tg_id", "day", "sheet_ref", "route", "vehicle", "boxes", "points", "pieces", "boxes_received",
@@ -50,16 +51,36 @@ def vehicles_view():
 
 
 def set_vehicles(run, codes):
-    """Авто рейсу: одне або кілька з тих, що знає бот. Повертає список або кидає ValueError з текстом для водія."""
+    """Авто рейсу: усі, на яких їздив за день, у порядку вибору (пересів — додав). Міняти можна будь-коли до здачі каси.
+    Повертає список або кидає ValueError з текстом для водія."""
     if not isinstance(codes, list):
         raise ValueError("Вибери авто")
-    picked = [c for c in VEHICLES if c in codes]                  # порядок — як у бота, зайвого не беремо
-    if not picked or len(picked) != len(codes):                  # чуже авто чи те саме двічі — відмова
+    picked = [c for c in codes if isinstance(c, str) and c in VEHICLES]
+    if not picked or len(picked) != len(codes) or len(set(picked)) != len(picked):   # чуже авто чи те саме двічі
         raise ValueError("Вибери авто зі списку")
-    if len(picked) > 3:
-        raise ValueError("Забагато авто на один рейс")
+    if len(picked) > 4:
+        raise ValueError("Забагато авто на один день")
     run["vehicles"] = picked
     return picked
+
+
+def set_post(run, sent, received):
+    """Пошта за день: скільки ящиків відправив і скільки отримав. Вводиться будь-коли в рейсі, останнє число — чинне."""
+    run["post"] = {"sent": _count(sent or 0, "Відправив", 3000), "received": _count(received or 0, "Отримав", 3000)}
+    return run["post"]
+
+
+async def expected(day):
+    """Посилки, які сьогодні мають прийти (з бланків замовлень постачальникам) — якщо бот уміє їх дати."""
+    if not PARCELS:
+        return []
+    try:
+        got = await asyncio.wait_for(_call(PARCELS, day), 6)
+        return [{"supplier": str(p.get("supplier", ""))[:60], "ttn": str(p.get("ttn", ""))[:30],
+                 "places": int(p.get("places") or 0)} for p in (got or []) if isinstance(p, dict)][:30]
+    except Exception as e:                                         # джерело мовчить — пошта вводиться як завжди
+        log.warning("reys: очікувані посилки не взято: %s", e)
+        return []
 
 
 def _count(v, name, top):
@@ -79,7 +100,10 @@ def check(run, d):
         raise ValueError("Спершу вибери авто")
     if not isinstance(d, dict) or d.get("boxes") in (None, ""):
         raise ValueError("Скільки ящиків розвіз?")
-    out = {"boxes": _count(d.get("boxes"), "Ящики", 3000), "post": _count(d.get("post") or 0, "Пошта", 3000)}
+    was = run.get("post") or {}                                    # пошту могли ввести ще в дорозі — на закритті підтверджують
+    pick = lambda k: d.get(k) if d.get(k) not in (None, "") else was.get(k, 0)      # noqa: E731
+    out = {"boxes": _count(d.get("boxes"), "Ящики", 3000), "sent": _count(pick("sent"), "Відправив", 3000),
+           "received": _count(pick("received"), "Отримав", 3000)}
     if d.get("ok") is True:
         return dict(out, ok=True, damage_vehicle="", damage_desc="")
     if d.get("ok") is not False:
@@ -108,7 +132,8 @@ def write(run_id, run, team, test):
         rows.append(dict(
             run_id=run_id, tg_id=t, day=run.get("day", ""), sheet_ref=run.get("sheet_ref", ""), route=route,
             vehicle=",".join(run.get("vehicles") or []), boxes=round(d["boxes"] * share, 2),
-            points=round(points * share, 2), pieces=None, boxes_received=round(d["post"] * share, 2), boxes_sent=0,
+            points=round(points * share, 2), pieces=None, boxes_received=round(d["received"] * share, 2),
+            boxes_sent=round(d["sent"] * share, 2),
             vehicle_ok=1 if d["ok"] else 0, damage_vehicle=d["damage_vehicle"], damage_desc=d["damage_desc"],
             damage_photo=None, hours_fact=hours, km=None, km_detail=None, share=share, km_owner=1 if n == 0 else 0,
             full_boxes=d["boxes"], full_points=points, full_pieces=None, started_at=started, closed_at=closed,

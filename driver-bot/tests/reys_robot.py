@@ -469,7 +469,7 @@ async def scenario_daily(seed=11):
             await call("all", i=k)
             if not run_now()["stops"][k]["status"]:
                 await call("given", i=k)
-        good = {"boxes": 9, "post": 2, "ok": True}
+        good = {"boxes": 9, "sent": 1, "received": 2, "ok": True}
         if (await call("close", daily=good))[0] == "ok":
             finding("захист", "звіт за день", "касу здано без вибору авто")
             return
@@ -477,18 +477,24 @@ async def scenario_daily(seed=11):
             if (await call("vehicle", codes=codes))[0] == "ok":
                 finding("захист", "вибір авто", f"прийнято неправильний список авто: {codes!r}")
         await call("vehicle", codes=["BB2222BB", "AA1111AA"])
-        if run_now().get("vehicles") != ["AA1111AA", "BB2222BB"]:
+        if run_now().get("vehicles") != ["BB2222BB", "AA1111AA"]:              # порядок — як вибирав водій
             finding("логіка", "вибір авто", f"авто записались не так: {run_now().get('vehicles')}")
         bad = [None, {}, {"boxes": "", "ok": True}, {"boxes": "абв", "ok": True}, {"boxes": -1, "ok": True},
                {"boxes": 99999, "ok": True}, {"boxes": 5}, {"boxes": 5, "ok": "так"}, {"boxes": 5, "ok": False},
                {"boxes": 5, "ok": False, "desc": "подряпина"},               # два авто — не сказано, яке
-               {"boxes": 5, "ok": False, "car": "ZZ", "desc": "подряпина"}, {"boxes": 5, "post": "x", "ok": True}]
+               {"boxes": 5, "ok": False, "car": "ZZ", "desc": "подряпина"}, {"boxes": 5, "sent": "x", "ok": True},
+               {"boxes": 5, "received": -3, "ok": True}]
+        for out, recv in (("x", 1), (-1, 0), (1, 99999)):
+            if (await call("post", sent=out, received=recv))[0] == "ok":
+                finding("захист", "пошта", f"прийнято неправильні числа: {out!r}, {recv!r}")
+        await call("post", sent=1, received=0)                                 # зранку відправив
+        await call("post", sent=1, received=2)                                 # у кінці маршруту ще й отримав
         for d in bad:
             if (await call("close", daily=d))[0] == "ok":
                 finding("захист", "звіт за день", f"касу здано з неповним звітом: {d!r}")
                 return
         rid = store.open_run(UID)[0]
-        r = await call("close", daily={"boxes": 9, "post": 2, "ok": False, "car": "BB2222BB", "desc": "  тріщина   на склі "})
+        r = await call("close", daily={"boxes": 9, "ok": False, "car": "BB2222BB", "desc": "  тріщина   на склі "})
         if r[0] != "ok":
             finding("збій", "звіт за день", f"правильний звіт не прийнято: {r[1]}")
             return
@@ -496,8 +502,8 @@ async def scenario_daily(seed=11):
         rows = daily.rows(run_id=rid)
         if len(rows) != 1 or rows[0]["test"] != 1 or rows[0]["sent"] or sent:
             finding("гроші", "звіт за день", "навчальний рейс пішов у старий звіт (зарплату) або записався не одним рядком")
-        elif (rows[0]["boxes"], rows[0]["boxes_received"], rows[0]["damage_vehicle"], rows[0]["damage_desc"],
-              rows[0]["vehicle"]) != (9, 2, "BB2222BB", "тріщина на склі", "AA1111AA,BB2222BB"):
+        elif (rows[0]["boxes"], rows[0]["boxes_sent"], rows[0]["boxes_received"], rows[0]["damage_vehicle"],
+              rows[0]["damage_desc"], rows[0]["vehicle"]) != (9, 1, 2, "BB2222BB", "тріщина на склі", "BB2222BB,AA1111AA"):
             finding("логіка", "звіт за день", f"у рядку не те, що ввів водій: {rows[0]}")
         # частки екіпажу: скільки б не було ящиків, у сумі — рівно стільки, скільки ввели
         for n in range(40):
@@ -505,14 +511,15 @@ async def scenario_daily(seed=11):
             run = build.demo_run(hd.today())
             run.pop("demo")
             run.update(sheet_ref=f"robot-{n}", vehicles=["AA1111AA"],
-                       daily={"boxes": boxes, "post": post, "ok": True, "damage_vehicle": "", "damage_desc": ""})
+                       daily={"boxes": boxes, "sent": post // 3, "received": post - post // 3, "ok": True,
+                              "damage_vehicle": "", "damage_desc": ""})
             for s in run["stops"][:rnd.randint(1, len(run["stops"]))]:
                 s["status"] = {"kind": "paid", "cash": 0, "alloc": []}
             team = [DRV_A, DRV_B][:rnd.randint(1, 2)]
             run_id = store.create(DRV_A, run)
             got = daily.write(run_id, run, team, test=True)
             pts = sum(1 for s in run["stops"] if s["status"])
-            if abs(sum(x["boxes"] for x in got) - boxes) > 0.011 or abs(sum(x["boxes_received"] for x in got) - post) > 0.011 \
+            if abs(sum(x["boxes"] for x in got) - boxes) > 0.011 or abs(sum(x["boxes_received"] + x["boxes_sent"] for x in got) - post) > 0.011 \
                     or abs(sum(x["points"] for x in got) - pts) > 0.011 or sum(x["km_owner"] for x in got) != 1:
                 finding("гроші", "звіт за день", f"частки екіпажу з {len(team)} не дають цілого: ящиків {boxes}, пошта {post}, точок {pts}")
             store.drop(run_id)

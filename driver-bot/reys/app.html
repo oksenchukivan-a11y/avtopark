@@ -94,7 +94,7 @@ input.sum:focus{outline:none;border-color:var(--accent)}
 .chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .chip.dim{opacity:.45}
 textarea.note{width:100%;margin-top:10px;border-radius:14px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font:500 17px system-ui;padding:12px}
-#post::placeholder{font-size:17px;font-weight:600}
+.btn.mini{min-height:52px;padding:8px 10px;font-size:15px;line-height:1.25}
 .linkish{display:block;background:none;border:0;padding:0;text-align:left;font:inherit;text-decoration:underline dotted}
 .x{border:0;background:none;font-size:20px;color:var(--debt);padding:4px 8px}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(100px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:14px 16px;border-radius:14px;font-weight:700;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s;z-index:9}
@@ -226,7 +226,8 @@ function vList(){
   const debt = st.filter(s => s.where === "debt" && !s.status).sort((a, b) => b.debt - a.debt), skip = st.filter(s => s.where === "skip");
   const pct = t.stops ? Math.round(100 * (t.stops - todo.length) / t.stops) : 100;
   let h = `<div class="top"><h1>${esc(r.title)}</h1><button class="icon" data-a="menu">⋯</button></div>
-  ${S.cfg.daily && (r.vehicles || []).length ? `<button class="small muted linkish" data-a="veh" style="margin:-6px 0 10px">🚐 ${esc(r.vehicles.map(carName).join(", "))} · змінити</button>` : ""}
+  ${S.cfg.daily && (r.vehicles || []).length ? `<div class="two" style="margin:-4px 0 10px"><button class="btn mini" data-a="veh"><span>🚐 ${esc(carName(r.vehicles[r.vehicles.length - 1]))}${r.vehicles.length > 1 ? ` (+${r.vehicles.length - 1})` : ""}<br><span class="small muted">змінити авто</span></span></button>
+    <button class="btn mini" data-a="post"><span>📮 Пошта<br><span class="small muted">${postTxt(r.post)}</span></span></button></div>` : ""}
   ${r.crew && r.crew.length > 1 ? `<div class="small muted" style="margin:-6px 0 10px">👥 ${esc(r.crew.join(" + "))} · рейс і каса спільні, усе навпіл</div>` : ""}
   <div class="card"><div class="count">${todo.length ? `Лишилось ${todo.length} з ${t.stops}` : "Усі точки відмічено"}</div>
     <div class="track"><i></i><u style="width:${pct}%"></u><s style="left:${Math.min(96, Math.max(4, pct))}%">🚚</s><em>🏁</em></div></div>
@@ -364,23 +365,39 @@ function vExpense(){
   return [h, [["back", "← Назад", "list"], ["go", "Записати", "saveexp"]]];
 }
 function carName(code){ const v = (S.cfg.vehicles || []).find(x => x.code === code); return v ? v.name : code; }
-function vVeh(){               // рішення власника 27.11: авто вибирається на старті рейсу, а не ввечері в анкеті
+function vVeh(){               // рішення власника 27.11: авто — на старті; пересів — додав ще одне, у порядку поїздки
   if (!S.veh) S.veh = (S.run.vehicles || []).slice();
   const has = (S.run.vehicles || []).length > 0;
-  let h = `<div class="count">🚐 Яким авто їдеш?</div><div class="muted">Якщо за день пересідав — познач усі</div>`;
+  let h = `<div class="count">🚐 ${has ? "Змінити авто" : "Яким авто їдеш?"}</div><div class="muted">${has ? "Пересів — додай авто, на якому їдеш зараз. Помилився — зніми зайве." : "Пересядеш за день — додаси ще одне."}</div>`;
   (S.cfg.vehicles || []).forEach(v => {
-    const on = S.veh.includes(v.code);
-    h += `<button class="btn left${on ? " blue" : ""}" data-a="vehtoggle" data-c="${esc(v.code)}"><span>${on ? "✅" : "⬜️"} ${esc(v.name)}</span><span></span></button>`;
+    const n = S.veh.indexOf(v.code);
+    h += `<button class="btn left${n >= 0 ? " blue" : ""}" data-a="vehtoggle" data-c="${esc(v.code)}"><span>${n >= 0 ? "✅" : "⬜️"} ${esc(v.name)}</span><span>${n >= 0 && S.veh.length > 1 ? n + 1 : ""}</span></button>`;
   });
-  return [h, [["back", has ? "← Назад" : "← Меню", has ? "list" : "tomenu"], [S.veh.length ? "go" : "go off", "Далі →", "saveveh"]]];
+  return [h, [["back", has ? "← Назад" : "← Меню", has ? "list" : "tomenu"], [S.veh.length ? "go" : "go off", has ? "Записати" : "Далі →", "saveveh"]]];
 }
-function newDay(){ return {boxes:"", post:"", ok:null, car:"", desc:""}; }
+function postTxt(p){ return p ? `📤 ${p.sent} · 📥 ${p.received}` : "ще не вводив"; }
+function parcelsHtml(){        // місце під наступний етап: посилки, які мають прийти, з бланків замовлень
+  const ps = S.parcels || [];
+  if (!ps.length) return "";
+  return `<div class="card wait"><b class="h">Сьогодні має прийти: ${ps.reduce((a, p) => a + (p.places || 0), 0)}</b>${ps.map(p => `<div class="line"><span>${esc(p.supplier)}${p.ttn ? ` · <span class="muted">${esc(p.ttn)}</span>` : ""}</span><span>${p.places || ""}</span></div>`).join("")}</div>`;
+}
+function vPost(){              // рішення власника 27.11: пошта двома числами й будь-коли — отримують зранку або в кінці маршруту
+  if (!S.post) { const p = S.run.post || {}; S.post = {sent: p.sent ? String(p.sent) : "", received: p.received ? String(p.received) : ""}; }
+  const h = `<div class="count">📮 Пошта за сьогодні</div><div class="muted">Скільки ящиків разом за день. Можна дописати пізніше.</div>
+    <div class="card"><b class="h">📤 Відправив</b><input class="sum" id="psent" inputmode="numeric" autocomplete="off" placeholder="0" value="${esc(S.post.sent)}"></div>
+    ${parcelsHtml()}
+    <div class="card"><b class="h">📥 Отримав</b><input class="sum" id="precv" inputmode="numeric" autocomplete="off" placeholder="0" value="${esc(S.post.received)}"></div>`;
+  return [h, [["back", "← Назад", "list"], ["go", "Записати", "savepost"]]];
+}
+function newDay(){ const p = S.run.post || {}; return {boxes:"", sent: p.sent ? String(p.sent) : "", received: p.received ? String(p.received) : "", ok:null, car:"", desc:""}; }
 function vDay(){               // те, що раніше було вечірньою анкетою: ящики, пошта, стан авто
   if (!S.day) S.day = newDay();
   const d = S.day, cars = S.run.vehicles || [];
   let h = `<div class="count">📋 Звіт за день</div><div class="muted">Точки, кілометри й штуки порахуються самі</div>
     <div class="card"><b class="h">📦 Скільки ящиків розвіз?</b><input class="sum" id="boxes" inputmode="numeric" autocomplete="off" placeholder="0" value="${esc(d.boxes)}"></div>
-    <div class="card"><b class="h">📮 Пошта: відправив і отримав разом</b><input class="sum" id="post" inputmode="numeric" autocomplete="off" placeholder="0 — пошти не було" value="${esc(d.post)}"></div>
+    <div class="card"><b class="h">📮 Пошта: перевір</b><div class="two">
+      <div><div class="small muted">📤 Відправив</div><input class="sum" id="sent" inputmode="numeric" autocomplete="off" placeholder="0" value="${esc(d.sent)}"></div>
+      <div><div class="small muted">📥 Отримав</div><input class="sum" id="received" inputmode="numeric" autocomplete="off" placeholder="0" value="${esc(d.received)}"></div></div></div>
     <div class="card"><b class="h">🚐 ${esc(cars.map(carName).join(", "))}</b>
       <div class="two"><button class="btn${d.ok === true ? " go" : ""}" data-a="dayok" data-v="1"><span>✅ В порядку</span></button>
       <button class="btn${d.ok === false ? " red" : ""}" data-a="dayok" data-v="0"><span>⚠️ Пошкодження</span></button></div>`;
@@ -414,8 +431,8 @@ function vDone(){
   return [`<div class="center"><div style="font-size:64px">🏁</div><div class="count">Касу здано</div><div class="big">${money(d.hand)}</div><div class="muted">${esc(d.title)}</div>${d.crew && d.crew.length > 1 ? `<div class="muted">👥 ${esc(d.crew.join(" + "))} · усе навпіл</div>` : ""}</div>`, [["go", "Готово", "exit"]]];
 }
 function vShut(){ return [`<div class="center"><div style="font-size:56px">🌙</div><p class="count">${esc(S.shut)}</p></div>`, []]; }
-const V = {shut:vShut, menu:vMenu, list:vList, card:vCard, pick:vPick, reasons:vReasons, block:vBlock, problem:vProblem, items:vItems, qty:vQty, expense:vExpense, close:vClose, done:vDone, veh:vVeh, day:vDay};
-const BACK = {card:"list", pick:"card", reasons:"card", block:"reasons", problem:"card", items:"problem", qty:"items", expense:"list", close:"list", veh:"list", day:"close"};
+const V = {shut:vShut, menu:vMenu, list:vList, card:vCard, pick:vPick, reasons:vReasons, block:vBlock, problem:vProblem, items:vItems, qty:vQty, expense:vExpense, close:vClose, done:vDone, veh:vVeh, day:vDay, post:vPost};
+const BACK = {card:"list", pick:"card", reasons:"card", block:"reasons", problem:"card", items:"problem", qty:"items", expense:"list", close:"list", veh:"list", day:"close", post:"list"};
 
 function drawDock(dock){
   $("dock").hidden = !dock.length;
@@ -490,10 +507,12 @@ const A = {
   saveexp: async () => { if (await api("expense", {sum:S.sum, kind:S.exp})) { S.sum = ""; toast("Записано"); go("list"); } },
   expdel: async d => { await api("expense_del", {k:+d.k}); render(true); },
   hand: async () => {
-    const d = S.day, args = S.cfg.daily && d ? {daily:{boxes:d.boxes, post:d.post || "0", ok:d.ok, car:d.car, desc:d.desc}} : {};
+    const d = S.day, args = S.cfg.daily && d ? {daily:{boxes:d.boxes, sent:d.sent || "0", received:d.received || "0", ok:d.ok, car:d.car, desc:d.desc}} : {};
     const j = await api("close", args);
     if (j) { S.done = j.done; S.day = null; S.veh = null; buzz("success"); go("done"); } },
   veh: () => { S.veh = null; go("veh"); },
+  post: async () => { S.post = null; S.parcels = []; go("post"); const j = await api("parcels"); if (j && j.parcels && j.parcels.length && S.scr === "post") { S.parcels = j.parcels; render(true); } },
+  savepost: async () => { if (await api("post", {sent:S.post.sent || "0", received:S.post.received || "0"})) { S.post = null; S.day = null; toast("Записано"); go("list"); } else render(true); },
   vehtoggle: d => { S.veh = S.veh.includes(d.c) ? S.veh.filter(x => x !== d.c) : S.veh.concat(d.c); render(true); },
   saveveh: async () => { if (await api("vehicle", {codes:S.veh})) { S.veh = null; go("list"); } else render(true); },
   tomenu: async () => { if (await api("menu")) { S.veh = null; S.scr = "menu"; render(); } },
@@ -512,7 +531,8 @@ document.addEventListener("click", ev => {
 });
 document.addEventListener("input", ev => {
   const id = ev.target.id;
-  if (S.day && (id === "boxes" || id === "post")) { S.day[id] = ev.target.value = ev.target.value.replace(/\D/g, "").slice(0, 4); updDay(); }
+  if (S.post && (id === "psent" || id === "precv")) S.post[id === "psent" ? "sent" : "received"] = ev.target.value = ev.target.value.replace(/\D/g, "").slice(0, 4);
+  if (S.day && (id === "boxes" || id === "sent" || id === "received")) { S.day[id] = ev.target.value = ev.target.value.replace(/\D/g, "").slice(0, 4); updDay(); }
   if (S.day && id === "desc") { S.day.desc = ev.target.value; updDay(); }
 });
 document.addEventListener("input", ev => { if (ev.target.id === "sum") { S.sum = ev.target.value.replace(/[^\d.,\s]/g, ""); if (S.scr === "pick") updPick(); } });

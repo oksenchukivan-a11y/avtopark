@@ -429,13 +429,36 @@ async def a_vehicle(uid, a):
     run_id, run = _run(uid)
     if not daily.enabled():
         raise Bad("Вибір авто ще не ввімкнено")
+    was = list(run.get("vehicles") or [])
     try:
         cars = daily.set_vehicles(run, a.get("codes"))
     except ValueError as e:
         raise Bad(str(e)) from None
-    store.log(run_id, uid, "vehicle", cars=cars)
+    if cars != was:
+        store.log(run_id, uid, "vehicle", cars=cars, was=was)     # кожна пересадка лишається в журналі
+        store.save(run_id, run)
+    return {}
+
+
+async def a_post(uid, a):
+    """Пошта: відправив і отримав — будь-коли в рейсі (зранку або в кінці маршруту). Кожне введення — в журнал."""
+    run_id, run = _run(uid)
+    if not daily.enabled():
+        raise Bad("Пошту ще не ввімкнено")
+    was = dict(run.get("post") or {})
+    try:
+        now = daily.set_post(run, a.get("sent"), a.get("received"))
+    except ValueError as e:
+        raise Bad(str(e)) from None
+    store.log(run_id, uid, "post", was=was, **now)
     store.save(run_id, run)
     return {}
+
+
+async def a_parcels(uid, a):
+    """Що сьогодні має прийти поштою — підказка над полем «Отримав»."""
+    run_id, run = _run(uid)
+    return {"parcels": await daily.expected(run.get("day", ""))}
 
 
 async def a_close(uid, a, who=""):
@@ -535,7 +558,8 @@ ACTIONS = {"state": a_state, "menu": a_menu, "start": a_start, "assign": a_assig
            "all": _quick(engine.pay_all, "all"), "today": _quick(engine.pay_today, "tod"),
            "given": _quick(engine.mark_given, "gv"), "pick": a_pick, "amount": a_amount, "none": a_none,
            "fix": a_fix, "items": a_items, "problem": a_problem, "other": a_other, "expense": a_expense,
-           "expense_del": a_expense_del, "close": a_close, "vehicle": a_vehicle}
+           "expense_del": a_expense_del, "close": a_close, "vehicle": a_vehicle,
+           "post": a_post, "parcels": a_parcels}
 
 
 # ---------- веб ----------
