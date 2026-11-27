@@ -13,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, ErrorEvent, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
-from . import build, engine, onec, store, ui
+from . import build, daily, engine, onec, store, ui
 
 log = logging.getLogger("reys")
 TZ = ZoneInfo("Europe/Kyiv")
@@ -116,9 +116,13 @@ def sent(msg):
     return msg
 
 
-def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, people=None):
+def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, people=None,
+          vehicles=None, km_for=None, to_reports=None, on_damage_photo=None):
     """Викликати один раз у main() ПЕРЕД підключенням основного роутера бота.
-    people — необов'язковий словник {tg_id: ім'я водія}, щоб власник бачив імена, а не номери."""
+    people — необов'язковий словник {tg_id: ім'я водія}, щоб власник бачив імена, а не номери.
+    vehicles — {код авто: назва}: з ним у рейсі з'являється «Звіт за день» (авто, ящики, пошта, стан авто).
+    km_for(коди, день) → (км, деталі) або None; to_reports(рядок) — запис у старий звіт (лише з REYS_TO_REPORTS=1);
+    on_damage_photo(bot, tg_id, file_id, авто, опис) — що бот робить із фото пошкодження."""
     global ON_SENT, ON_ACT
     ON_SENT, ON_ACT = on_sent, on_act
     from . import web                       # тут, а не вгорі: web сам користується цим файлом
@@ -134,6 +138,9 @@ def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, p
     store.init()
     from . import wh_report
     wh_report.init()
+    daily.init()
+    daily.VEHICLES = {str(k): str(v) for k, v in (vehicles or {}).items()}
+    daily.KM_FOR, daily.TO_REPORTS, daily.ON_PHOTO = km_for, to_reports, on_damage_photo
     for tg_id, name in (people or {}).items():
         store.set_name(tg_id, name)
     router.message.filter(F.from_user.id.in_(TESTERS))
@@ -519,6 +526,30 @@ def manager_names():
                 pass
     names.discard("")
     return sorted(names)
+
+
+@router.message(F.photo, lambda m: daily.photo_wait(m.from_user.id) is not None)
+async def msg_damage_photo(m: Message):
+    """Фото пошкодження після здачі каси: file_id — у звіт за день, саме фото — власникові."""
+    uid, file_id = m.from_user.id, m.photo[-1].file_id
+    run_id = daily.photo_wait(uid)
+    row = next(iter(daily.rows(run_id=run_id)), {})
+    daily.set_photo(uid, run_id, file_id)
+    car, desc = row.get("damage_vehicle") or "", row.get("damage_desc") or ""
+    if daily.ON_PHOTO:
+        try:
+            got = daily.ON_PHOTO(m.bot, uid, file_id, car, desc)
+            if hasattr(got, "__await__"):
+                await got
+        except Exception as e:
+            log.warning("reys: фото пошкодження бот не прийняв: %s", e)
+    if ADMIN and ADMIN != uid and not row.get("test"):
+        try:
+            who = store.known_people().get(uid, "")
+            await m.bot.send_photo(ADMIN, file_id, caption=f"⚠️ Пошкодження: {daily.VEHICLES.get(car, car)}\n{desc}\n{who}"[:1000])
+        except Exception as e:
+            log.warning("reys: фото пошкодження власникові не надіслано: %s", e)
+    sent(await m.answer("📷 Фото записав. Дякую."))          # саме фото не стираємо: воно — доказ
 
 
 @router.message(F.contact, lambda m: m.from_user.id == ADMIN)

@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl
 
 from aiohttp import web
 
-from . import build, engine, onec, store, ui, view
+from . import build, daily, engine, onec, store, ui, view
 from . import handlers as hd
 
 log = logging.getLogger("reys.web")
@@ -424,14 +424,43 @@ async def a_expense_del(uid, a):
     return {}
 
 
+async def a_vehicle(uid, a):
+    """Яким авто їде рейс (одне чи кілька). Одне на весь екіпаж; можна змінити до здачі каси."""
+    run_id, run = _run(uid)
+    if not daily.enabled():
+        raise Bad("Вибір авто ще не ввімкнено")
+    try:
+        cars = daily.set_vehicles(run, a.get("codes"))
+    except ValueError as e:
+        raise Bad(str(e)) from None
+    store.log(run_id, uid, "vehicle", cars=cars)
+    store.save(run_id, run)
+    return {}
+
+
 async def a_close(uid, a, who=""):
     run_id, run = _run(uid)
     if engine.open_stops(run):
         raise Bad("Ще є точки без відмітки")
+    if daily.enabled():                                  # «Звіт за день» здається разом із касою
+        try:
+            run["daily"] = daily.check(run, a.get("daily"))
+        except ValueError as e:
+            raise Bad(str(e)) from None
     run["closed"] = True
     t = engine.totals(run)
     store.log(run_id, uid, "close", **{k: v for k, v in t.items() if k != "why"})
     store.close(run_id, run)
+    if run.get("daily"):
+        try:                                             # каса вже здана — збій звіту її не скасовує
+            test = bool(run.get("demo") or run.get("snap") or uid in hd.trial_ids())
+            daily.write(run_id, run, team_of(uid, run), test)
+            store.log(run_id, uid, "daily", **run["daily"])
+            daily.start_enrich(run_id, run)              # штуки з 1С і кілометри — слідом, водій не чекає
+            if not run["daily"]["ok"]:
+                daily.wait_photo(uid, run_id)
+        except Exception:
+            log.exception("reys: звіт за день не записано (рейс %s)", run_id)
     await after_close(uid, run, who)
     v = view.run_view(run)
     return {"done": {"hand": t["hand"], "cash": t["cash"], "spent": t["spent"], "unpaid": t["unpaid"],
@@ -474,6 +503,14 @@ async def after_close(uid, run, who):
                 log.info("reys: кнопку рейсу не прибрано: %s", e)
             store.set_screen(t, None, None)
     name = " + ".join(names.get(t) or (who if t == uid else str(t)) for t in team)
+    d = run.get("daily") or {}
+    if d and not d["ok"]:                                # фото пошкодження — у чаті, як у старому звіті
+        try:
+            car = daily.VEHICLES.get(d["damage_vehicle"], d["damage_vehicle"])
+            hd.sent(await bot.send_message(uid, f"📷 <b>Надішли сюди фото пошкодження</b>\n{car}: {d['damage_desc']}",
+                                           parse_mode="HTML"))
+        except Exception as e:
+            log.warning("reys: прохання про фото не надіслано: %s", e)
     if not run.get("demo") or uid == hd.ADMIN:        # рішення власника 27.11: звіт менеджерам — поки приклад лише йому
         await mgr_preview(bot, uid, run, name)
         try:                                          # 27.11: помилки збору — по комірниках (поки приклад власникові)
@@ -498,7 +535,7 @@ ACTIONS = {"state": a_state, "menu": a_menu, "start": a_start, "assign": a_assig
            "all": _quick(engine.pay_all, "all"), "today": _quick(engine.pay_today, "tod"),
            "given": _quick(engine.mark_given, "gv"), "pick": a_pick, "amount": a_amount, "none": a_none,
            "fix": a_fix, "items": a_items, "problem": a_problem, "other": a_other, "expense": a_expense,
-           "expense_del": a_expense_del, "close": a_close}
+           "expense_del": a_expense_del, "close": a_close, "vehicle": a_vehicle}
 
 
 # ---------- веб ----------
@@ -550,7 +587,8 @@ async def api(request: web.Request):
     if "run" not in out:
         run_id, run = store.open_run(uid)
         out["run"] = view.run_view(run) if run else None
-    out["cfg"] = {"call": os.environ.get("REYS_CALL", "link")}
+    out["cfg"] = {"call": os.environ.get("REYS_CALL", "link"), "daily": daily.enabled(),
+                  "vehicles": daily.vehicles_view() if daily.enabled() else []}
     return _json(out)
 
 

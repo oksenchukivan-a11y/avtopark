@@ -93,6 +93,9 @@ input.sum:focus{outline:none;border-color:var(--accent)}
 .chip{padding:12px 16px;border-radius:999px;border:2px solid var(--line);background:var(--surface);font:inherit;font-weight:700;color:var(--ink)}
 .chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 .chip.dim{opacity:.45}
+textarea.note{width:100%;margin-top:10px;border-radius:14px;border:2px solid var(--line);background:var(--surface);color:var(--ink);font:500 17px system-ui;padding:12px}
+#post::placeholder{font-size:17px;font-weight:600}
+.linkish{display:block;background:none;border:0;padding:0;text-align:left;font:inherit;text-decoration:underline dotted}
 .x{border:0;background:none;font-size:20px;color:var(--debt);padding:4px 8px}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(100px + env(safe-area-inset-bottom));background:var(--ink);color:var(--bg);padding:14px 16px;border-radius:14px;font-weight:700;text-align:center;opacity:0;pointer-events:none;transition:opacity .2s;z-index:9}
 .toast.on{opacity:1}
@@ -111,7 +114,7 @@ input.sum:focus{outline:none;border-color:var(--accent)}
 "use strict";
 const tg = window.Telegram && window.Telegram.WebApp;
 const INIT = tg ? tg.initData : "";
-const S = {run:null, menu:null, scr:"load", i:null, open:{}, sel:[], sum:"", kind:null, items:null, item:null, itemN:0, psel:{}, qty:1, exp:"Нова пошта", done:null, cfg:{}};
+const S = {run:null, menu:null, scr:"load", i:null, open:{}, sel:[], sum:"", kind:null, items:null, item:null, itemN:0, psel:{}, qty:1, exp:"Нова пошта", done:null, cfg:{}, veh:null, day:null};
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 function money(x){
@@ -223,6 +226,7 @@ function vList(){
   const debt = st.filter(s => s.where === "debt" && !s.status).sort((a, b) => b.debt - a.debt), skip = st.filter(s => s.where === "skip");
   const pct = t.stops ? Math.round(100 * (t.stops - todo.length) / t.stops) : 100;
   let h = `<div class="top"><h1>${esc(r.title)}</h1><button class="icon" data-a="menu">⋯</button></div>
+  ${S.cfg.daily && (r.vehicles || []).length ? `<button class="small muted linkish" data-a="veh" style="margin:-6px 0 10px">🚐 ${esc(r.vehicles.map(carName).join(", "))} · змінити</button>` : ""}
   ${r.crew && r.crew.length > 1 ? `<div class="small muted" style="margin:-6px 0 10px">👥 ${esc(r.crew.join(" + "))} · рейс і каса спільні, усе навпіл</div>` : ""}
   <div class="card"><div class="count">${todo.length ? `Лишилось ${todo.length} з ${t.stops}` : "Усі точки відмічено"}</div>
     <div class="track"><i></i><u style="width:${pct}%"></u><s style="left:${Math.min(96, Math.max(4, pct))}%">🚚</s><em>🏁</em></div></div>
@@ -359,6 +363,40 @@ function vExpense(){
   if (r.expenses.length) h += `<div class="card"><b class="h">Уже записано</b>${r.expenses.map((x, k) => `<div class="line"><span>${esc(x.kind)}</span><span>${money(x.sum)} <button class="x" data-a="expdel" data-k="${k}">✕</button></span></div>`).join("")}</div>`;
   return [h, [["back", "← Назад", "list"], ["go", "Записати", "saveexp"]]];
 }
+function carName(code){ const v = (S.cfg.vehicles || []).find(x => x.code === code); return v ? v.name : code; }
+function vVeh(){               // рішення власника 27.11: авто вибирається на старті рейсу, а не ввечері в анкеті
+  if (!S.veh) S.veh = (S.run.vehicles || []).slice();
+  const has = (S.run.vehicles || []).length > 0;
+  let h = `<div class="count">🚐 Яким авто їдеш?</div><div class="muted">Якщо за день пересідав — познач усі</div>`;
+  (S.cfg.vehicles || []).forEach(v => {
+    const on = S.veh.includes(v.code);
+    h += `<button class="btn left${on ? " blue" : ""}" data-a="vehtoggle" data-c="${esc(v.code)}"><span>${on ? "✅" : "⬜️"} ${esc(v.name)}</span><span></span></button>`;
+  });
+  return [h, [["back", has ? "← Назад" : "← Меню", has ? "list" : "tomenu"], [S.veh.length ? "go" : "go off", "Далі →", "saveveh"]]];
+}
+function newDay(){ return {boxes:"", post:"", ok:null, car:"", desc:""}; }
+function vDay(){               // те, що раніше було вечірньою анкетою: ящики, пошта, стан авто
+  if (!S.day) S.day = newDay();
+  const d = S.day, cars = S.run.vehicles || [];
+  let h = `<div class="count">📋 Звіт за день</div><div class="muted">Точки, кілометри й штуки порахуються самі</div>
+    <div class="card"><b class="h">📦 Скільки ящиків розвіз?</b><input class="sum" id="boxes" inputmode="numeric" autocomplete="off" placeholder="0" value="${esc(d.boxes)}"></div>
+    <div class="card"><b class="h">📮 Пошта: відправив і отримав разом</b><input class="sum" id="post" inputmode="numeric" autocomplete="off" placeholder="0 — пошти не було" value="${esc(d.post)}"></div>
+    <div class="card"><b class="h">🚐 ${esc(cars.map(carName).join(", "))}</b>
+      <div class="two"><button class="btn${d.ok === true ? " go" : ""}" data-a="dayok" data-v="1"><span>✅ В порядку</span></button>
+      <button class="btn${d.ok === false ? " red" : ""}" data-a="dayok" data-v="0"><span>⚠️ Пошкодження</span></button></div>`;
+  if (d.ok === false) {
+    if (cars.length > 1) h += `<div class="chips">${cars.map(c => `<button class="chip${d.car === c ? " on" : ""}" data-a="daycar" data-c="${esc(c)}">${esc(carName(c))}</button>`).join("")}</div>`;
+    h += `<textarea class="note" id="desc" rows="3" placeholder="Що сталось? Фото надішлеш у чат після здачі каси">${esc(d.desc)}</textarea>`;
+  }
+  h += `</div>`;
+  const ready = d.boxes !== "" && d.ok !== null && (d.ok || (d.desc.trim().length > 2 && (cars.length === 1 || d.car)));
+  return [h, [["back", "← Назад", "close"], [ready ? "go" : "go off", `🏁 Здаю касу<br>${money(S.run.totals.hand)}`, "hand"]]];
+}
+function updDay(){             // поля не перемальовуємо, щоб клавіатура не стрибала — оновлюємо тільки кнопку
+  const d = S.day, cars = S.run.vehicles || [], b = document.querySelector('#dock [data-a="hand"]');
+  const ready = d.boxes !== "" && d.ok !== null && (d.ok || (d.desc.trim().length > 2 && (cars.length === 1 || d.car)));
+  if (b) { b.disabled = !ready; b.classList.toggle("off", !ready); }
+}
 function vClose(){
   const r = S.run, t = r.totals;
   let h = `<div class="count">🏁 Здача каси</div><div class="big">${money(t.hand)}</div><div class="muted">💰 до здачі</div>
@@ -368,6 +406,7 @@ function vClose(){
     ${Object.keys(t.why).map(k => `<div class="line"><span class="muted">${esc(k)}</span><span>${t.why[k]}</span></div>`).join("")}
     <div class="line"><span>📦 Товар повернувся</span><span>${t.back}</span></div><div class="line"><span>⚠️ Проблеми з товаром</span><span>${t.probs}</span></div></div>`;
   if (t.left) { h += `<div class="card debt"><b>Ще ${t.left} ${plural(t.left, "точка", "точки", "точок")} без відмітки.</b> Касу здати не можна.</div>`; return [h, [["back wide", "← До списку", "list"]]]; }
+  if (S.cfg.daily) return [h, [["back", "← Назад", "list"], ["go", "Далі: звіт за день →", "today"]]];
   return [h, [["back", "← Назад", "list"], ["go", `🏁 Здаю касу<br>${money(t.hand)}`, "hand"]]];
 }
 function vDone(){
@@ -375,8 +414,8 @@ function vDone(){
   return [`<div class="center"><div style="font-size:64px">🏁</div><div class="count">Касу здано</div><div class="big">${money(d.hand)}</div><div class="muted">${esc(d.title)}</div>${d.crew && d.crew.length > 1 ? `<div class="muted">👥 ${esc(d.crew.join(" + "))} · усе навпіл</div>` : ""}</div>`, [["go", "Готово", "exit"]]];
 }
 function vShut(){ return [`<div class="center"><div style="font-size:56px">🌙</div><p class="count">${esc(S.shut)}</p></div>`, []]; }
-const V = {shut:vShut, menu:vMenu, list:vList, card:vCard, pick:vPick, reasons:vReasons, block:vBlock, problem:vProblem, items:vItems, qty:vQty, expense:vExpense, close:vClose, done:vDone};
-const BACK = {card:"list", pick:"card", reasons:"card", block:"reasons", problem:"card", items:"problem", qty:"items", expense:"list", close:"list"};
+const V = {shut:vShut, menu:vMenu, list:vList, card:vCard, pick:vPick, reasons:vReasons, block:vBlock, problem:vProblem, items:vItems, qty:vQty, expense:vExpense, close:vClose, done:vDone, veh:vVeh, day:vDay};
+const BACK = {card:"list", pick:"card", reasons:"card", block:"reasons", problem:"card", items:"problem", qty:"items", expense:"list", close:"list", veh:"list", day:"close"};
 
 function drawDock(dock){
   $("dock").hidden = !dock.length;
@@ -387,6 +426,7 @@ function drawDock(dock){
 }
 function render(keep){
   if (!["done", "menu", "shut"].includes(S.scr) && !S.run) S.scr = "menu";
+  if (S.scr === "list" && S.cfg.daily && S.run && !(S.run.vehicles || []).length) S.scr = "veh";   // спершу — яким авто
   const y = keep ? window.scrollY : 0, focus = keep && document.activeElement && document.activeElement.id === "sum";
   const [html, dock] = V[S.scr]();
   $("main").innerHTML = html;
@@ -449,7 +489,17 @@ const A = {
   exp: d => { S.exp = d.k; render(true); },
   saveexp: async () => { if (await api("expense", {sum:S.sum, kind:S.exp})) { S.sum = ""; toast("Записано"); go("list"); } },
   expdel: async d => { await api("expense_del", {k:+d.k}); render(true); },
-  hand: async () => { const j = await api("close"); if (j) { S.done = j.done; buzz("success"); go("done"); } },
+  hand: async () => {
+    const d = S.day, args = S.cfg.daily && d ? {daily:{boxes:d.boxes, post:d.post || "0", ok:d.ok, car:d.car, desc:d.desc}} : {};
+    const j = await api("close", args);
+    if (j) { S.done = j.done; S.day = null; S.veh = null; buzz("success"); go("done"); } },
+  veh: () => { S.veh = null; go("veh"); },
+  vehtoggle: d => { S.veh = S.veh.includes(d.c) ? S.veh.filter(x => x !== d.c) : S.veh.concat(d.c); render(true); },
+  saveveh: async () => { if (await api("vehicle", {codes:S.veh})) { S.veh = null; go("list"); } else render(true); },
+  tomenu: async () => { if (await api("menu")) { S.veh = null; S.scr = "menu"; render(); } },
+  today: () => go("day"),
+  dayok: d => { S.day.ok = d.v === "1"; render(true); },
+  daycar: d => { S.day.car = d.c; render(true); },
   exit: () => { tg && tg.close ? tg.close() : go("menu"); },
 };
 document.addEventListener("click", ev => {
@@ -459,6 +509,11 @@ document.addEventListener("click", ev => {
   buzz();
   const f = A[el.dataset.a];
   if (f) f(el.dataset);
+});
+document.addEventListener("input", ev => {
+  const id = ev.target.id;
+  if (S.day && (id === "boxes" || id === "post")) { S.day[id] = ev.target.value = ev.target.value.replace(/\D/g, "").slice(0, 4); updDay(); }
+  if (S.day && id === "desc") { S.day.desc = ev.target.value; updDay(); }
 });
 document.addEventListener("input", ev => { if (ev.target.id === "sum") { S.sum = ev.target.value.replace(/[^\d.,\s]/g, ""); if (S.scr === "pick") updPick(); } });
 

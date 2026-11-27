@@ -30,6 +30,7 @@ class App:
         os.environ["REYS_WEB_URL"] = "https://reys.example.test/"
         self.tg = Tg()
         web.SHEETS.clear()
+        web.HITS.clear()                 # ліміт запитів рахується за хвилину — між перевірками обнуляємо
         web.STATE.update(bot=self.tg.bot, secret=web.secret_for(TOKEN), runner=object())
         self.client = TestClient(TestServer(web.make_app()))
         await self.client.start_server()
@@ -958,3 +959,130 @@ def test_manager_is_told_which_clients_have_no_phone():
     if skip:
         skip["phones"] = []
         assert all(skip["name"] not in t.split("📵")[-1] for t in mgr_report.build(run).values() if "📵" in t)
+
+
+# ---------- звіт за день у рейсі (рішення власника 27.11) ----------
+
+CARS = {"AA1111AA": "Бус 1", "BB2222BB": "Бус 2"}
+
+
+async def mark_all(app, who):
+    for s in (await app.call("state", who=who))[1]["run"]["stops"]:
+        if s["where"] == "route" and not s["status"]:
+            await app.call("all" if s["due"] > 0 else "given", who=who, i=s["i"])
+
+
+def test_day_report_is_filled_at_cash_handover_and_split_for_crew():
+    """Авто — на старті, ящики/пошта/стан авто — перед здачею каси; двом водіям — по рядку, усе навпіл, км не задвоєно."""
+    from aiogram.methods import SendPhoto
+    from aiogram.types import Chat, Message, PhotoSize, Update
+    import datetime as dt
+    from reys import daily
+
+    async def go():
+        async with Drivers() as app:
+            sent_rows, photos = [], []
+            daily.VEHICLES = dict(CARS)
+            daily.KM_FOR = lambda codes, day: (87, {c: {"km": 87, "src": "gps"} for c in codes})
+            daily.TO_REPORTS = sent_rows.append
+            daily.ON_PHOTO = lambda bot, uid, fid, car, desc: photos.append((uid, fid, car, desc))
+            try:
+                store.set_name(333, "Перший")
+                store.set_name(444, "Другий")
+                for who in (333, 444):
+                    await app.call("assign", id="1c:" + SHEET, to=who)
+                j = (await app.call("start", who=333, id="1c:" + SHEET))[1]
+                assert j["cfg"]["daily"] and [v["code"] for v in j["cfg"]["vehicles"]] == list(CARS) and j["run"]["vehicles"] == []
+                assert not (await app.call("vehicle", who=333, codes=["ZZ0000ZZ"]))[1]["ok"]         # не з нашого парку
+                assert not (await app.call("vehicle", who=333, codes=[]))[1]["ok"]
+                j = (await app.call("vehicle", who=444, codes=["AA1111AA"]))[1]                      # авто одне на екіпаж
+                assert j["ok"] and (await app.call("state", who=333))[1]["run"]["vehicles"] == ["AA1111AA"]
+                await mark_all(app, 333)
+                ok_day = {"boxes": "7", "post": "3", "ok": False, "desc": "подряпина на бампері"}
+                for bad, word in (({}, "ящик"), (dict(ok_day, boxes="абв"), "число"), (dict(ok_day, boxes="-2"), "число"),
+                                  (dict(ok_day, ok=None), "порядку"), (dict(ok_day, desc=" "), "Опиши")):
+                    j = (await app.call("close", who=444, daily=bad))[1]
+                    assert not j["ok"] and word in j["msg"] and j["run"], (bad, j["msg"])           # рейс лишається відкритим
+                before = len(app.tg.session.sent)
+                assert (await app.call("close", who=444, daily=ok_day))[1]["ok"]
+                await daily.drain()
+                rows = daily.rows(run_id=1)
+                assert [(r["tg_id"], r["km_owner"]) for r in rows] == [(333, 1), (444, 0)]
+                for r in rows:
+                    assert (r["boxes"], r["boxes_received"], r["boxes_sent"], r["share"]) == (3.5, 1.5, 0, 0.5)
+                    assert r["points"] * 2 == r["full_points"] == 5 and r["full_boxes"] == 7
+                    assert (r["vehicle"], r["vehicle_ok"], r["damage_vehicle"], r["damage_desc"]) == \
+                        ("AA1111AA", 0, "AA1111AA", "подряпина на бампері")
+                    assert r["km"] == 87 and json.loads(r["km_detail"])["AA1111AA"]["src"] == "gps"
+                    assert r["route"] and r["test"] == 0 and r["src"] == "reys" and r["sent"] == 0 and r["hours_fact"] is not None
+                assert sum(r["km"] for r in rows if r["km_owner"]) == 87                               # км один раз на авто
+                assert sent_rows == []                                                                 # у старий звіт — ні, прапорець вимкнено
+                ask = [m for m in app.tg.session.sent[before:] if isinstance(m, SendMessage) and m.chat_id == 444]
+                assert len(ask) == 1 and "фото пошкодження" in ask[0].text
+                # водій шле фото в чат: воно лягає у звіт обом і йде власникові
+                photo = Message(message_id=7001, date=dt.datetime.now(), chat=Chat(id=444, type="private"),
+                                from_user=app.tg.user(444), photo=[PhotoSize(file_id="F1", file_unique_id="u", width=9, height=9)])
+                before = len(app.tg.session.sent)
+                await app.tg.dp.feed_update(app.tg.bot, Update(update_id=7001, message=photo))
+                assert {r["damage_photo"] for r in daily.rows(run_id=1)} == {"F1"}
+                assert photos == [(444, "F1", "AA1111AA", "подряпина на бампері")]
+                assert [m.chat_id for m in app.tg.session.sent[before:] if isinstance(m, SendPhoto)] == [ME]
+                assert daily.photo_wait(444) is None                                                   # друге фото вже не ловимо
+                # один водій, прапорець увімкнено: рядок іде в старий звіт рівно раз; пробний рейс власника — ніколи
+                os.environ["REYS_TO_REPORTS"] = "1"
+                await app.call("assign", id="1c:" + OTHER, to=333)
+                await app.call("start", who=333, id="1c:" + OTHER)
+                await app.call("vehicle", who=333, codes=["BB2222BB", "AA1111AA"])
+                await mark_all(app, 333)
+                assert (await app.call("close", who=333, daily={"boxes": 12, "ok": True}))[1]["ok"]
+                await daily.drain()
+                assert len(sent_rows) == 1 and (sent_rows[0]["tg_id"], sent_rows[0]["boxes"], sent_rows[0]["share"],
+                                                sent_rows[0]["vehicle"], sent_rows[0]["boxes_received"]) == \
+                    (333, 12, 1.0, "AA1111AA,BB2222BB", 0)
+                assert [r["sent"] for r in daily.rows(run_id=2)] == [1]
+                await app.call("start", id="demo")                                                     # власник пробує сам
+                await app.call("vehicle", codes=["AA1111AA"])
+                await mark_all(app, ME)
+                assert (await app.call("close", daily={"boxes": 1, "ok": True}))[1]["ok"]
+                await daily.drain()
+                assert len(sent_rows) == 1 and [r["test"] for r in daily.rows(run_id=3)] == [1]
+                assert len(daily.rows(day=handlers.today())) == 4
+            finally:
+                os.environ.pop("REYS_TO_REPORTS", None)
+                daily.VEHICLES, daily.KM_FOR, daily.TO_REPORTS, daily.ON_PHOTO = {}, None, None, None
+    asyncio.run(go())
+
+
+def test_pieces_counted_from_delivered_invoices():
+    """Штуки: кількість із накладних, що лишились у клієнта, мінус нестача й відмова. Без 1С — порожньо, каса не чекає."""
+    import tempfile
+    from reys import build, daily, engine
+    store.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
+    store.init()
+    run = build.demo_run(handlers.today())
+    for n, s in enumerate(run["stops"]):
+        s["key"] = f"client-{n}"
+    a, b, c = run["stops"][0], run["stops"][1], run["stops"][2]
+    engine.pay_all(a, 1)
+    engine.add_problem(a, a["inv"][0]["ref"], "miss", "Шампунь", 2, 1.0)
+    engine.add_problem(a, a["inv"][0]["ref"], "dmg", "Фарба", 1, 1.0)          # пошкоджене все одно привезли
+    engine.mark_none(b, 1, "closed", left=False)                                # товар не залишив — штуки не рахуються
+    asked = []
+
+    async def by_keys(obj, keys, select, **kw):
+        asked.append(set(keys))
+        return [{"Ref_Key": k, "Товары": [{"Количество": 10}, {"Количество": 5}]} for k in keys]
+
+    async def go():
+        old = (daily.onec.by_keys, daily.onec.URL)
+        daily.onec.by_keys = by_keys
+        try:
+            daily.onec.URL = ""
+            assert await daily.pieces(run) is None and asked == []               # 1С не підключено
+            daily.onec.URL = "http://stub"
+            mine = {i["ref"] for i in engine.riding(a)}
+            assert await daily.pieces(run) == 15 * len(mine) - 2 and asked == [mine]
+            assert not ({i["ref"] for i in engine.riding(b)} | {i["ref"] for i in engine.riding(c)}) & asked[0]
+        finally:
+            daily.onec.by_keys, daily.onec.URL = old
+    asyncio.run(go())

@@ -11,7 +11,8 @@
   5. Екіпаж із двох: один рейс і одна каса на двох, відмітки не губляться й не задвоюються, частки 50/50 і 100 %.
   6. Звіт менеджерам: сума менеджера = оплати по його накладних, двоє на одній точці бачать кожен своє.
   7. Помилки складу: кожна позиція — один рядок, відмова клієнта туди не йде, пробний рейс у місяць не рахується.
-  8. Кнопки бота: кожна кнопка кожного екрана — текст не порожній, дані кнопки ≤ 64 байти (ліміт Telegram);
+  8. Звіт за день: без авто й ящиків касу не здати, частки екіпажу в сумі дають ціле, навчальний рейс у зарплату не йде.
+  9. Кнопки бота: кожна кнопка кожного екрана — текст не порожній, дані кнопки ≤ 64 байти (ліміт Telegram);
      кожен код кнопки ловить рівно один обробник.
 Результат: data/robot/reys_YYYY-MM-DD_HHMM.json + короткий підсумок у вивід (і власнику в Telegram з ключем --tg).
 
@@ -37,8 +38,9 @@ store.DB_PATH = os.environ["DB_PATH"]
 onec.URL = ""
 web.STATE["bot"] = None
 store.init()
-from reys import wh_report  # noqa: E402
+from reys import daily, wh_report  # noqa: E402
 wh_report.init()
+daily.init()
 
 UID = 999000001
 FIND = []          # знахідки: {"тип", "де", "що", "кроки"}
@@ -452,6 +454,76 @@ async def scenario_warehouse(seed=5):
         c.execute("DELETE FROM reys_wh_probs")
 
 
+async def scenario_daily(seed=11):
+    """Рішення власника 27.11: «Звіт за день» здається разом із касою — авто, ящики, пошта, стан авто."""
+    STATS["сценаріїв"] += 1
+    rnd = random.Random(seed)
+    sent = []
+    keep = (dict(daily.VEHICLES), daily.TO_REPORTS, os.environ.get("REYS_TO_REPORTS"))
+    daily.VEHICLES = {"AA1111AA": "Бус 1", "BB2222BB": "Бус 2"}
+    daily.TO_REPORTS = sent.append
+    os.environ["REYS_TO_REPORTS"] = "1"
+    try:
+        await fresh()
+        for k in route_idx(run_now()):
+            await call("all", i=k)
+            if not run_now()["stops"][k]["status"]:
+                await call("given", i=k)
+        good = {"boxes": 9, "post": 2, "ok": True}
+        if (await call("close", daily=good))[0] == "ok":
+            finding("захист", "звіт за день", "касу здано без вибору авто")
+            return
+        for codes in ([], ["ZZ"], "AA1111AA", ["AA1111AA", "AA1111AA"], None):
+            if (await call("vehicle", codes=codes))[0] == "ok":
+                finding("захист", "вибір авто", f"прийнято неправильний список авто: {codes!r}")
+        await call("vehicle", codes=["BB2222BB", "AA1111AA"])
+        if run_now().get("vehicles") != ["AA1111AA", "BB2222BB"]:
+            finding("логіка", "вибір авто", f"авто записались не так: {run_now().get('vehicles')}")
+        bad = [None, {}, {"boxes": "", "ok": True}, {"boxes": "абв", "ok": True}, {"boxes": -1, "ok": True},
+               {"boxes": 99999, "ok": True}, {"boxes": 5}, {"boxes": 5, "ok": "так"}, {"boxes": 5, "ok": False},
+               {"boxes": 5, "ok": False, "desc": "подряпина"},               # два авто — не сказано, яке
+               {"boxes": 5, "ok": False, "car": "ZZ", "desc": "подряпина"}, {"boxes": 5, "post": "x", "ok": True}]
+        for d in bad:
+            if (await call("close", daily=d))[0] == "ok":
+                finding("захист", "звіт за день", f"касу здано з неповним звітом: {d!r}")
+                return
+        rid = store.open_run(UID)[0]
+        r = await call("close", daily={"boxes": 9, "post": 2, "ok": False, "car": "BB2222BB", "desc": "  тріщина   на склі "})
+        if r[0] != "ok":
+            finding("збій", "звіт за день", f"правильний звіт не прийнято: {r[1]}")
+            return
+        await daily.drain()
+        rows = daily.rows(run_id=rid)
+        if len(rows) != 1 or rows[0]["test"] != 1 or rows[0]["sent"] or sent:
+            finding("гроші", "звіт за день", "навчальний рейс пішов у старий звіт (зарплату) або записався не одним рядком")
+        elif (rows[0]["boxes"], rows[0]["boxes_received"], rows[0]["damage_vehicle"], rows[0]["damage_desc"],
+              rows[0]["vehicle"]) != (9, 2, "BB2222BB", "тріщина на склі", "AA1111AA,BB2222BB"):
+            finding("логіка", "звіт за день", f"у рядку не те, що ввів водій: {rows[0]}")
+        # частки екіпажу: скільки б не було ящиків, у сумі — рівно стільки, скільки ввели
+        for n in range(40):
+            boxes, post = rnd.randint(0, 300), rnd.randint(0, 40)
+            run = build.demo_run(hd.today())
+            run.pop("demo")
+            run.update(sheet_ref=f"robot-{n}", vehicles=["AA1111AA"],
+                       daily={"boxes": boxes, "post": post, "ok": True, "damage_vehicle": "", "damage_desc": ""})
+            for s in run["stops"][:rnd.randint(1, len(run["stops"]))]:
+                s["status"] = {"kind": "paid", "cash": 0, "alloc": []}
+            team = [DRV_A, DRV_B][:rnd.randint(1, 2)]
+            run_id = store.create(DRV_A, run)
+            got = daily.write(run_id, run, team, test=True)
+            pts = sum(1 for s in run["stops"] if s["status"])
+            if abs(sum(x["boxes"] for x in got) - boxes) > 0.011 or abs(sum(x["boxes_received"] for x in got) - post) > 0.011 \
+                    or abs(sum(x["points"] for x in got) - pts) > 0.011 or sum(x["km_owner"] for x in got) != 1:
+                finding("гроші", "звіт за день", f"частки екіпажу з {len(team)} не дають цілого: ящиків {boxes}, пошта {post}, точок {pts}")
+            store.drop(run_id)
+    finally:
+        daily.VEHICLES, daily.TO_REPORTS = keep[0], keep[1]
+        os.environ.pop("REYS_TO_REPORTS", None) if keep[2] is None else os.environ.update(REYS_TO_REPORTS=keep[2])
+        with store.db() as c:
+            c.execute("DELETE FROM reys_daily")
+            c.execute("UPDATE reys_runs SET status='dropped' WHERE tg_id IN (?,?) AND status='open'", (DRV_A, DRV_B))
+
+
 async def scenario_guards():
     STATS["сценаріїв"] += 1
     await fresh()
@@ -644,6 +716,7 @@ async def main():
                        ("інший товар", scenario_other()), ("менеджери", scenario_managers()),
                        ("захист", scenario_guards()), ("екіпаж", scenario_crew()),
                        ("звіт менеджерам", scenario_mgr_report()), ("помилки складу", scenario_warehouse()),
+                       ("звіт за день", scenario_daily()),
                        ("кнопки бота", scenario_bot_buttons())]:
         try:
             await coro

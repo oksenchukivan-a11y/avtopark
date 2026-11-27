@@ -108,6 +108,13 @@ def open_run(tg_id):
     return None, None
 
 
+def run_times(run_id):
+    """(коли рейс відкрито, коли закрито) — рядками часу."""
+    with db() as c:
+        r = c.execute("SELECT created_at, closed_at FROM reys_runs WHERE id=?", (run_id,)).fetchone()
+    return (r["created_at"], r["closed_at"]) if r else (None, None)
+
+
 def owner(run_id):
     """Хто відкрив рейс."""
     with db() as c:
