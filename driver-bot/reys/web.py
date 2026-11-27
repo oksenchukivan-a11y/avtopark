@@ -459,6 +459,13 @@ async def after_close(uid, run, who):
     name = " + ".join(names.get(t) or (who if t == uid else str(t)) for t in team)
     if not run.get("demo") or uid == hd.ADMIN:        # рішення власника 27.11: звіт менеджерам — поки приклад лише йому
         await mgr_preview(bot, uid, run, name)
+        try:                                          # 27.11: помилки збору — по комірниках (поки приклад власникові)
+            from . import wh_report
+            wh = await wh_report.collect(run, view.run_view(run).get("title", ""), name, trial=uid in hd.trial_ids())
+            if wh and hd.ADMIN:
+                hd.sent(await bot.send_message(hd.ADMIN, wh, parse_mode="HTML"))
+        except Exception as ex:
+            log.warning("reys: звіт складу не зібрано: %s", ex)
     if run.get("demo"):                              # навчальний рейс нікому не звітує
         return
     # Підсумок справжнього рейсу має хтось отримати. Касира не вписано — отримує власник.

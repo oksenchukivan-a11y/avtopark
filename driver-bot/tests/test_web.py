@@ -137,7 +137,10 @@ def test_full_run_through_app():
             report = [m for m in sent if isinstance(m, SendMessage) and m.chat_id == 777]
             assert len(report) == 1 and "здано" in report[0].text                     # підсумок — касиру
             prev = [m for m in sent if isinstance(m, SendMessage) and m.chat_id == ME]      # звіт менеджерам — приклад власникові
-            assert prev[0].text.startswith("👁") and len(prev) == 1 + int(prev[0].text.rsplit("· ", 1)[1]) >= 3
+            mgr = [m for m in prev if m.text.startswith("🚚")]
+            assert prev[0].text.startswith("👁") and len(mgr) == int(prev[0].text.rsplit("· ", 1)[1]) >= 2
+            wh = [m for m in prev if m.text.startswith("📦")]                              # помилки збору — теж приклад власникові
+            assert len(wh) <= 1 and len(prev) == 1 + len(mgr) + len(wh)
             assert store.open_run(ME) == (None, None) and store.screen(ME) == (None, None)
             assert (await app.call("state"))[1]["run"] is None
     asyncio.run(go())
@@ -840,3 +843,58 @@ def test_manager_report_shows_each_manager_only_own_clients():
         got = sum(x["paid"] for s in run["stops"] if s["status"] for x in s["status"]["alloc"] if x["ref"] in refs)
         assert f"Забрано <b>{engine.money(round(got, 2))}</b>" in text
     assert not mgr_report.build(build.demo_run(handlers.today()))           # без відміток — нема про що звітувати
+
+
+def test_warehouse_errors_go_to_the_picker_once():
+    """Власник 27.11: «не вистачає / не той / пошкоджено» — це помилка збору; до кожної — хто збирав, підсумок за місяць."""
+    import tempfile
+    from reys import build, engine, wh_report
+    store.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
+    store.init()
+    wh_report.init()
+    day = handlers.today()
+
+    def make():
+        run = build.demo_run(day)
+        run.pop("demo")
+        one, two = run["stops"][0], run["stops"][3]                       # одна накладна; дві накладні різних комірників
+        engine.add_problem(one, one["inv"][0]["ref"], "miss", "Шампунь 1 л", 1, 10.0)
+        engine.add_problem(one, one["inv"][0]["ref"], "miss", "Шампунь 1 л", 1, 10.0)   # ту саму позицію ще раз, по штуці
+        engine.add_problem(one, one["inv"][0]["ref"], "refuse", "Фарба 6.0", 2, 10.0)   # відмова клієнта — не склад
+        engine.add_other(one, "wrong")
+        engine.add_other(two, "dmg")
+        return run, one, two
+
+    run, one, two = make()
+    pick = {one["inv"][0]["ref"]: "k1", two["inv"][0]["ref"]: "k1", two["inv"][1]["ref"]: "k2"}
+
+    async def by_keys(obj, keys, select, **kw):
+        if "Реализация" in obj:
+            return [{"Ref_Key": r, "Кладовщик_Key": pick[r]} for r in keys if r in pick]
+        return [{"Ref_Key": k, "Description": f"Комірник  {k}"} for k in keys if k]
+
+    def table():
+        with store.db() as c:
+            return [tuple(r) for r in c.execute("SELECT kind, item, qty, picker, test FROM reys_wh_probs ORDER BY kind, item")]
+
+    async def go():
+        old, wh_report.onec.by_keys = wh_report.onec.by_keys, by_keys
+        try:
+            assert await wh_report.collect(build.demo_run(day)) is None      # без проблем — нема про що писати
+            text = await wh_report.collect(run, "Суми · місто", "Перший", trial=True)   # пробний рейс власника
+            assert "пробний рейс" in text and "🗓" not in text and {r[4] for r in table()} == {1}
+            text = await wh_report.collect(make()[0], "Суми · місто", "Перший")         # справжній — замінює пробні записи
+            rows = table()
+            assert rows == [("dmg", engine.OTHER_ITEM, 0.0, wh_report.NOBODY, 0),      # дві накладні, комірники різні
+                            ("miss", "Шампунь 1 л", 2.0, "Комірник k1", 0),             # дві штуки — один рядок
+                            ("wrong", engine.OTHER_ITEM, 0.0, "Комірник k1", 0)]        # одна накладна — її комірник
+            assert "Фарба 6.0" not in text and "Комірник k1" in text and "За " in text and "Позицій: <b>4</b>" in text
+            await wh_report.collect(make()[0], "Суми · місто", "Перший")               # повторний збір нічого не задвоює
+            assert table() == rows
+            pick[two["inv"][1]["ref"]] = "k1"                                           # обидві накладні збирав один — тоді він
+            store.db().execute("DELETE FROM reys_wh_probs").connection.commit()
+            await wh_report.collect(make()[0])
+            assert {r[3] for r in table()} == {"Комірник k1"}
+        finally:
+            wh_report.onec.by_keys = old
+    asyncio.run(go())

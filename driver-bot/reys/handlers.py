@@ -132,6 +132,8 @@ def setup(dp, admin_id: int = 0, db_path: str = "", on_sent=None, on_act=None, p
     TESTERS.clear()
     TESTERS.update(ids)
     store.init()
+    from . import wh_report
+    wh_report.init()
     for tg_id, name in (people or {}).items():
         store.set_name(tg_id, name)
     router.message.filter(F.from_user.id.in_(TESTERS))

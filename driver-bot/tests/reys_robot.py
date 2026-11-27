@@ -10,7 +10,8 @@
   4. «Хаотичний водій»: тисячі випадкових натискань (зерно фіксоване — будь-яку знахідку можна повторити).
   5. Екіпаж із двох: один рейс і одна каса на двох, відмітки не губляться й не задвоюються, частки 50/50 і 100 %.
   6. Звіт менеджерам: сума менеджера = оплати по його накладних, двоє на одній точці бачать кожен своє.
-  7. Кнопки бота: кожна кнопка кожного екрана — текст не порожній, дані кнопки ≤ 64 байти (ліміт Telegram);
+  7. Помилки складу: кожна позиція — один рядок, відмова клієнта туди не йде, пробний рейс у місяць не рахується.
+  8. Кнопки бота: кожна кнопка кожного екрана — текст не порожній, дані кнопки ≤ 64 байти (ліміт Telegram);
      кожен код кнопки ловить рівно один обробник.
 Результат: data/robot/reys_YYYY-MM-DD_HHMM.json + короткий підсумок у вивід (і власнику в Telegram з ключем --tg).
 
@@ -36,6 +37,8 @@ store.DB_PATH = os.environ["DB_PATH"]
 onec.URL = ""
 web.STATE["bot"] = None
 store.init()
+from reys import wh_report  # noqa: E402
+wh_report.init()
 
 UID = 999000001
 FIND = []          # знахідки: {"тип", "де", "що", "кроки"}
@@ -406,6 +409,49 @@ async def scenario_mgr_report(seed=3):
             finding("логіка", "звіт менеджерам", f"{s['name']}: точку ведуть двоє, а у звіті вона не в кожного")
 
 
+async def scenario_warehouse(seed=5):
+    """Рішення власника 27.11: «не вистачає / не той / пошкоджено» — помилка збору, до комірника й у підсумок місяця."""
+    STATS["сценаріїв"] += 1
+    rnd = random.Random(seed)
+    await fresh()
+    want = set()
+    for k in route_idx(run_now()):
+        r = await call("items", i=k)
+        if r[0] != "ok":
+            continue
+        for it in r[1]["items"][:2]:
+            kind = rnd.choice(list(engine.PROBLEMS))
+            if (await call("problem", i=k, kind=kind, rows=[{"ii": it["ii"], "li": it["li"], "qty": 1}]))[0] == "ok" \
+                    and kind in wh_report.KINDS:
+                want.add((k, it["no"], kind, it["name"]))
+        if rnd.random() < 0.5 and (await call("other", i=k, kind="wrong"))[0] == "ok":
+            want.add((k, "—", "wrong", engine.OTHER_ITEM))
+    run = run_now()
+
+    def rows():
+        with store.db() as c:
+            return [tuple(r) for r in c.execute("SELECT inv_no, kind, item, test FROM reys_wh_probs")]
+    with store.db() as c:
+        c.execute("DELETE FROM reys_wh_probs")
+    text = await wh_report.collect(run, "перевірка", "робот")
+    got = rows()
+    if len(got) != len(want):
+        finding("логіка", "помилки складу", f"позначено {len(want)} позицій складу, а записано {len(got)}")
+    if any(r[1] not in wh_report.KINDS for r in got):
+        finding("логіка", "помилки складу", "у помилки складу потрапила відмова клієнта")
+    if any(r[3] != 1 for r in got):
+        finding("логіка", "помилки складу", "навчальний рейс пішов у місячний підсумок комірників")
+    if want and (not text or "🗓" in text):
+        finding("логіка", "помилки складу", "звіт навчального рейсу порожній або показує місячний підсумок")
+    if text and len(text) > 4000:
+        finding("кнопки", "помилки складу", f"звіт довший за ліміт Telegram: {len(text)} знаків")
+    await wh_report.collect(run, "перевірка", "робот")
+    if rows() != got:
+        finding("логіка", "помилки складу", "повторний збір того самого рейсу задвоїв рядки")
+    with store.db() as c:
+        c.execute("DELETE FROM reys_wh_probs")
+
+
 async def scenario_guards():
     STATS["сценаріїв"] += 1
     await fresh()
@@ -597,7 +643,7 @@ async def main():
     for name, coro in [("сценарій", scenario_full()), ("товар списком", scenario_list()),
                        ("інший товар", scenario_other()), ("менеджери", scenario_managers()),
                        ("захист", scenario_guards()), ("екіпаж", scenario_crew()),
-                       ("звіт менеджерам", scenario_mgr_report()),
+                       ("звіт менеджерам", scenario_mgr_report()), ("помилки складу", scenario_warehouse()),
                        ("кнопки бота", scenario_bot_buttons())]:
         try:
             await coro
