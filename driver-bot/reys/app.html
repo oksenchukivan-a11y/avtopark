@@ -408,7 +408,13 @@ const A = {
   close: () => go("close"),
   menu: async () => { if (await api("menu")) go("menu"); },
   start: async d => { if (await api("start", {id:d.id, force:!!S.run})) { S.open = {}; go("list"); } },
-  assign: async d => { await api("assign", {id:d.id, to:+d.to, on:d.on === "1"}); render(true); },
+  assign: async d => {           // фішка перемикається одразу, сервер підтверджує слідом
+    const s = ((S.menu || {}).sheets || []).find(x => x.id === d.id), was = s ? (s.crew || []).slice() : [], to = +d.to, on = d.on === "1";
+    if (s) { s.crew = on ? was.concat(to) : was.filter(x => x !== to); render(true); }
+    const j = await api("assign", {id:d.id, to, on});
+    if (!j && s) s.crew = was;
+    render(true);
+  },
   fold: d => { S.open[d.k] = !S.open[d.k]; render(true); },
   open: async d => { S.i = +d.i; S.sel = []; S.sum = ""; const st = stop(); if (st.where !== "skip") { await api("open", {i:S.i}); go("card"); } },
   who: d => { $("sheet").innerHTML = whoSheet(S.run.stops[+d.i]); },

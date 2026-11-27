@@ -45,8 +45,14 @@ SECTIONS = [("paid", "✅", "Забрав гроші"), ("part", "🟡", "Час
 
 def build(run, title="", drivers=""):
     """{менеджер: html} — по одному повідомленню на менеджера."""
-    by = {}
+    by, nophone = {}, {}
+    loaded = any(st.get("phones") for st in run["stops"])           # телефони взагалі читались із 1С
     for st in run["stops"]:
+        # рішення власника 27.11: у клієнта немає телефону в 1С — менеджер має його внести
+        if loaded and "phones" in st and not st["phones"] and st.get("where") in ("route", "debt"):
+            ms = {e.clean(i.get("manager")) for i in st.get("inv", [])} | {e.clean(st.get("manager"))}
+            for m in sorted(filter(None, ms)):
+                nophone.setdefault(m, []).append(st["name"])
         if not st.get("status"):
             continue
         mgrs = {e.clean(i.get("manager")) for i in e.riding(st)} | {e.clean(d.get("manager")) for d in e.debts(st)}
@@ -61,6 +67,8 @@ def build(run, title="", drivers=""):
     except ValueError:
         day = d
     people, out = store.people(), {}
+    for m in nophone:                                               # менеджер лише з цим розділом теж отримує звіт
+        by.setdefault(m, [])
     for m, rows in by.items():
         v = view.mgr_view(m, people)
         got = round(sum(r[2] for r in rows), 2)
@@ -74,5 +82,8 @@ def build(run, title="", drivers=""):
             if groups[k]:
                 lines += ["", f"{ico} <b>{cap} — {len(groups[k])}</b>",
                           "<blockquote>" + "\n\n".join(groups[k]) + "</blockquote>"]
+        if nophone.get(m):
+            lines += ["", f"📵 <b>Нема телефону клієнта — внеси в 1С: {len(nophone[m])}</b>",
+                      "<blockquote>" + "\n".join(h(n) for n in nophone[m]) + "</blockquote>"]
         out[m] = "\n".join(x for x in lines if x is not None)
     return out

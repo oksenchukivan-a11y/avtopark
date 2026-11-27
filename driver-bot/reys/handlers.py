@@ -266,7 +266,7 @@ async def sheet_cities(ref: str):
 async def sheet_label(stub):
     """Назва путівки для людини: напрямок замість номера. Власник: «просто номера, як понять»."""
     ref, hhmm, no = stub["Ref_Key"], stub["Date"][11:16], stub["Number"].lstrip("0")
-    got = store.title(ref)
+    got = store.title(ref, max_age_min=360)      # напрямок путівки за день не змінюється — у 1С по нього раз
     if got is None:
         try:
             cities, points = await sheet_cities(ref)

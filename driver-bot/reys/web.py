@@ -3,6 +3,7 @@
 Сторінка сама даних не містить. Кожен запит несе підпис Telegram (initData); сервер перевіряє його
 ключем бота і пускає тільки тестувальників. Слухає лише локальну адресу — назовні його віддає Caddy.
 """
+import asyncio
 import hashlib
 import hmac
 import json
@@ -24,6 +25,8 @@ STATE = {"bot": None, "runner": None, "secret": b""}
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.html")
 
 
+SHEETS: dict = {}            # список путівок дня з 1С: {день: (коли прочитано, рядки)}
+SHEETS_TTL = 60              # секунд: меню відкривають часто, а нова путівка з'являється двічі на день
 HITS: dict = {}              # хто скільки запитів зробив за останню хвилину
 RATE = 40                    # запитів на людину за хвилину: на точку йде 2–6 запитів, швидше ніж точка за 10 с не буває
 
@@ -147,7 +150,18 @@ def _money(v):
     return v
 
 
-async def menu(uid, day=None):
+async def day_sheets(day, quick=False):
+    """Путівки дня. Щоб меню не чекало 1С на кожен дотик: хвилину віддаємо прочитане,
+    а коли власник складає екіпаж (quick) — прочитане будь-якої давності."""
+    at, rows = SHEETS.get(day, (0, None))
+    if rows is None or not (quick or time.time() - at < SHEETS_TTL):
+        rows = await hd.list_sheets(day)
+        SHEETS.clear()
+        SHEETS[day] = (time.time(), rows)
+    return rows
+
+
+async def menu(uid, day=None, quick=False):
     """Що ця людина може відкрити. Власник бачить усі путівки дня і складає екіпаж (один-двоє водіїв);
     водій — тільки ті, де він в екіпажі. Знімки — лише власникові, навчальний рейс — усім."""
     day = day or hd.today()
@@ -156,16 +170,19 @@ async def menu(uid, day=None):
     names, own, done = store.known_people(), store.crews(), store.closed_refs(ignore=hd.trial_ids())
     if onec.configured():
         try:
-            for s in await hd.list_sheets(day):
+            seen = []
+            for s in await day_sheets(day, quick):
+                team = own.get(s["Ref_Key"], [])
+                if admin or (uid in team and s["Ref_Key"] not in done):   # здану путівку водієві вже не показуємо
+                    seen.append((s, team))
+            labels = await asyncio.gather(*(hd.sheet_label(s) for s, _ in seen))   # назви — разом, а не по черзі
+            for (s, team), (name, sub) in zip(seen, labels):
                 ref = s["Ref_Key"]
-                team = own.get(ref, [])
-                if admin or (uid in team and ref not in done):       # здану путівку водієві вже не показуємо
-                    name, sub = await hd.sheet_label(s)
-                    row = {"id": "1c:" + ref, "title": name, "sub": sub,
-                           "mates": [names.get(t, str(t)) for t in team if t != uid]}    # з ким їдеш
-                    if admin:
-                        row.update(crew=team, who=" + ".join(names.get(t, str(t)) for t in team), done=ref in done)
-                    sheets.append(row)
+                row = {"id": "1c:" + ref, "title": name, "sub": sub,
+                       "mates": [names.get(t, str(t)) for t in team if t != uid]}    # з ким їдеш
+                if admin:
+                    row.update(crew=team, who=" + ".join(names.get(t, str(t)) for t in team), done=ref in done)
+                sheets.append(row)
             if not sheets:
                 note = f"За {day:%d.%m} путівок у 1С ще немає." if admin else "Путівку за тобою ще не закріплено."
         except onec.OneCError as e:
@@ -220,7 +237,7 @@ async def a_assign(uid, a):
         for t in gone:
             store.crew_del(ref, t)
     hd.act(uid, f"assign:{to}")
-    return {"menu": await menu(uid)}
+    return {"menu": await menu(uid, quick=True)}
 
 
 async def a_start(uid, a):

@@ -29,6 +29,7 @@ class App:
     async def __aenter__(self):
         os.environ["REYS_WEB_URL"] = "https://reys.example.test/"
         self.tg = Tg()
+        web.SHEETS.clear()
         web.STATE.update(bot=self.tg.bot, secret=web.secret_for(TOKEN), runner=object())
         self.client = TestClient(TestServer(web.make_app()))
         await self.client.start_server()
@@ -898,3 +899,62 @@ def test_warehouse_errors_go_to_the_picker_once():
         finally:
             wh_report.onec.by_keys = old
     asyncio.run(go())
+
+
+def test_menu_does_not_wait_for_1c_on_every_tap():
+    """Власник 27.11: «підвисає, довго реагує». Список путівок читаємо з 1С раз на хвилину, а не на кожен дотик."""
+    async def go():
+        async with Drivers() as app:
+            calls, labels = [], []
+            real, cities = handlers.list_sheets, handlers.sheet_cities
+
+            async def sheets(day):
+                calls.append(day)
+                return await real(day)
+
+            async def slow_cities(ref):
+                labels.append(ref)
+                return await cities(ref)
+            handlers.list_sheets, handlers.sheet_cities = sheets, slow_cities
+            try:
+                await app.call("state")                                        # перше відкриття — один похід у 1С
+                assert len(calls) == 1 and len(labels) == 2
+                for who in (333, 444, 333):
+                    assert (await app.call("assign", id="1c:" + SHEET, to=who))[1]["ok"]
+                await app.call("menu")
+                assert (await app.call("start", id="demo"))[1]["ok"]           # навчальний рейс 1С не чекає взагалі
+                await app.call("state", who=333)
+                assert len(calls) == 1 and len(labels) == 2                    # жодного нового запиту
+                day, (at, rows) = next(iter(web.SHEETS.items()))
+                web.SHEETS[day] = (at - web.SHEETS_TTL - 1, rows)              # минула хвилина — список оновлюється
+                await app.call("menu", who=333)
+                assert len(calls) == 2 and len(labels) == 2                    # назви путівок удруге не читаємо
+                web.SHEETS[day] = (0, rows)                                    # екіпаж складається з прочитаного, хоч і давнього
+                await app.call("assign", id="1c:" + OTHER, to=444)
+                assert len(calls) == 2
+            finally:
+                handlers.list_sheets, handlers.sheet_cities = real, cities
+    asyncio.run(go())
+
+
+def test_manager_is_told_which_clients_have_no_phone():
+    """Власник 27.11: у клієнта немає телефону в 1С — менеджер бачить це у звіті після рейсу і вносить."""
+    import tempfile
+    from reys import build, engine, mgr_report
+    store.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
+    store.init()
+    run = build.demo_run(handlers.today())
+    assert not any("📵" in t for t in mgr_report.build(run).values())          # телефони не читались — нікого не лякаємо
+    for st in run["stops"]:
+        st["phones"] = ["+380500000001"]
+    quiet = run["stops"][0]
+    quiet["phones"] = []                                                       # точку не відмічено, а телефону немає
+    engine.pay_all(run["stops"][1], 1)
+    reps = mgr_report.build(run, "Суми · місто", "Перший")
+    owner = engine.clean(quiet["inv"][0]["manager"])
+    assert f"внеси в 1С: 1</b>" in reps[owner] and quiet["name"] in reps[owner]
+    assert sum("📵" in t for t in reps.values()) == len({engine.clean(i.get("manager")) for i in quiet["inv"]} | {engine.clean(quiet.get("manager"))} - {""})
+    skip = next((s for s in run["stops"] if s["where"] == "skip"), None)
+    if skip:
+        skip["phones"] = []
+        assert all(skip["name"] not in t.split("📵")[-1] for t in mgr_report.build(run).values() if "📵" in t)
