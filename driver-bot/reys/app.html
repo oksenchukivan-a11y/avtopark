@@ -148,8 +148,12 @@ async function api(act, args){
 const stop = () => S.run && S.run.stops[S.i];
 
 /* ---------- дзвінок ---------- */
+function viaBrowser(){         // в айфонному Telegram посилання tel: не набирає — дзвонимо через сторінку в браузері
+  const p = tg && tg.platform;
+  return S.cfg.call === "browser" || p === "ios" || p === "macos";
+}
 function telAttrs(num){
-  return S.cfg.call === "browser" ? `data-a="dial" data-n="${esc(num)}"` : `href="tel:${esc(num)}"`;
+  return viaBrowser() ? `data-a="dial" data-n="${esc(num)}"` : `href="tel:${esc(num)}"`;
 }
 function mgrBtns(st, names){       // кнопка на кожного менеджера; без телефону — пояснює, а не мовчить
   const list = st.mgrs.filter(m => !names || names.includes(m.name));
@@ -456,6 +460,7 @@ document.addEventListener("input", ev => { if (ev.target.id === "sum") { S.sum =
   try {
     if (tg) {
       tg.ready(); tg.expand();
+      tg.disableVerticalSwipes && tg.disableVerticalSwipes();      // свайп униз не закриває рейс посеред роботи
       document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light";
       const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
       tg.setHeaderColor && tg.setHeaderColor(bg); tg.setBackgroundColor && tg.setBackgroundColor(bg);
