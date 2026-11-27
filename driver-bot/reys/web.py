@@ -546,12 +546,16 @@ async def after_close(uid, run, who):
     if run.get("demo"):                              # навчальний рейс нікому не звітує
         return
     if tail.enabled() and run.get("tailable") and hd.ADMIN and uid not in hd.trial_ids():
-        try:                                         # що з міських накладних дня лишилось на складі
-            left = await tail.left_behind(run, ignore=hd.trial_ids())
-            if left:
-                hd.sent(await bot.send_message(hd.ADMIN, left, parse_mode="HTML"))
-        except Exception as e:
-            log.warning("reys: звірка складу не надіслана: %s", e)
+        async def left():                            # що з міських накладних дня лишилось на складі — уже без водія
+            try:
+                text = await tail.left_behind(run, ignore=hd.trial_ids())
+                if text:
+                    hd.sent(await bot.send_message(hd.ADMIN, text, parse_mode="HTML"))
+            except Exception as e:
+                log.warning("reys: звірка складу не надіслана: %s", e)
+        task = asyncio.get_running_loop().create_task(left())
+        daily.TASKS.add(task)
+        task.add_done_callback(daily.TASKS.discard)
     # Підсумок справжнього рейсу має хтось отримати. Касира не вписано — отримує власник.
     to = hd.ids_from_env("REYS_CASHIER") or ({hd.ADMIN} if hd.ADMIN else set())
     for cid in to - {uid}:

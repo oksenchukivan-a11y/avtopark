@@ -141,10 +141,11 @@ async def prev_city_print(printed: datetime) -> datetime:
     return printed - timedelta(days=1)
 
 
-async def fresh(a: datetime, b: datetime, ride: date, known, kind="new", on_wait=wait):
+async def fresh(a: datetime, b: datetime, ride: date, known, kind="new", on_wait=wait, blank=None):
     """Проведені накладні клієнтів міста за проміжок (a, b], яких немає в жодній путівці й серед known.
     Без самовивозу, пошти й своїх магазинів. Відкладені на пізніше не віддає, а записує через on_wait.
-    Якщо нових накладних немає — це один запит до 1С."""
+    blank — список, куди скласти накладні клієнтів, у яких у 1С не вказано місто: у рейс їх не беремо
+    (невідомо, чи це місто), але власник має про них знати. Якщо нових накладних немає — це один запит до 1С."""
     from . import handlers as hd
     docs = await onec.call(
         "query", object=REAL, select="Ref_Key,Number,Date,СуммаДокумента,Контрагент_Key,Агент_Key", orderby="Date", top=500,
@@ -165,8 +166,9 @@ async def fresh(a: datetime, b: datetime, ride: date, known, kind="new", on_wait
         return []
     cards = {c["Ref_Key"]: c for c in await onec.by_keys(
         "Catalog_Контрагенты", {d["Контрагент_Key"] for d in docs}, "Ref_Key,Description,ДополнительноеОписание")}
+    town = {k: build.city_name(c.get("ДополнительноеОписание", "")) for k, c in cards.items()}
     docs = [d for d in docs if d["Контрагент_Key"] in cards
-            and build.city_name(cards[d["Контрагент_Key"]].get("ДополнительноеОписание", "")) == CITY
+            and (town[d["Контрагент_Key"]] == CITY or (blank is not None and not town[d["Контрагент_Key"]]))
             and not own_shop(cards[d["Контрагент_Key"]].get("Description", ""))]
     if not docs:
         return []
@@ -190,6 +192,9 @@ async def fresh(a: datetime, b: datetime, ride: date, known, kind="new", on_wait
                 "manager": agents.get(d.get("Агент_Key"), ""), "comment": short_comment(comment), "tags": sorted(tg),
                 "tail": kind, "tail_from": d["Date"][:10]}
         when = delivery_date(comment, datetime.fromisoformat(order["Date"][:19]).date()) if order else None
+        if not town[d["Контрагент_Key"]]:
+            blank.append(item)                                             # місто не вказано — тільки власникові
+            continue
         if when and when > ride:
             on_wait(dict(item, tail="moved"), when, d["Date"][:10])       # приїде у свій день
             continue
@@ -233,6 +238,7 @@ async def extend(run, printed: datetime, ride: date, ignore=()):
     try:
         prev = await prev_city_print(printed)
         items += await fresh(prev, printed, ride, have | done | {it["ref"] for it in items})
+        run["tail_since"] = prev.isoformat(timespec="seconds")     # звідси ввечері рахуємо «що не поїхало»
     except onec.OneCError as e:
         log.warning("reys: хвіст дня — нові накладні не прочитано: %s", e)
     run["tail_checked"] = printed.isoformat(timespec="seconds")
@@ -307,27 +313,36 @@ async def watch(bot):
 # ---------- після здачі каси: що лишилось на складі ----------
 
 async def left_behind(run, now=None, ignore=()):
-    """Текст для власника: накладні міста за день, які не поїхали або повернулись. None — усе розвезли."""
+    """Текст для власника: накладні міста за день, які не поїхали або повернулись, і окремо — накладні клієнтів,
+    у яких у 1С не вказано місто (у рейс вони не потрапляють). None — усе розвезли."""
     now = now or datetime.now()
-    rows = []
+    rows, blank = [], []
     for st in run["stops"]:
         s = st.get("status") or {}
         if s.get("kind") == "back":
             rows += [(inv["no"], st["name"], inv.get("manager", ""), s.get("text", "товар не залишив")) for inv in engine.riding(st)]
     try:
         done, _ = past(ignore)
-        since = datetime.fromisoformat(run.get("tail_checked") or f"{run['day']}T00:00:00")
+        since = datetime.fromisoformat(run.get("tail_since") or run.get("tail_checked") or f"{run['day']}T00:00:00")
         known = {i["ref"] for s in run["stops"] for i in s["inv"]} | done
-        late = await fresh(since, now, date.fromisoformat(run["day"]), known)
-        rows += [(x["no"], x["name"], x["manager"], "виписана після останньої перевірки, у рейс не потрапила") for x in late]
+        late = await fresh(since, now, date.fromisoformat(run["day"]), known, blank=blank)
+        rows += [(x["no"], x["name"], x["manager"], "у рейс не потрапила") for x in late]
     except (onec.OneCError, ValueError) as e:
         log.warning("reys: звірка складу після рейсу: %s", e)
-    if not rows:
+    if not rows and not blank:
         return None
-    body = "\n\n".join(f"№ {h(no)} · <b>{h(name)}</b>\n{h(engine.clean(mgr)) or 'менеджер не вказаний'} · {h(why)}"
-                       for no, name, mgr, why in rows[:25])
-    more = f"\n\n… і ще {len(rows) - 25}" if len(rows) > 25 else ""
-    return f"📦 <b>Стоїть на складі, не поїхала: {len(rows)}</b>\n<blockquote>{body}{more}</blockquote>"
+
+    def block(items, top=20):
+        body = "\n\n".join(f"№ {h(no)} · <b>{h(name)}</b>\n{h(engine.clean(mgr)) or 'менеджер не вказаний'}"
+                             + (f" · {h(why)}" if why else "") for no, name, mgr, why in items[:top])
+        return f"<blockquote>{body}" + (f"\n\n… і ще {len(items) - top}" if len(items) > top else "") + "</blockquote>"
+    out = []
+    if rows:
+        out.append(f"📦 <b>Стоїть на складі, не поїхала: {len(rows)}</b>\n" + block(rows))
+    if blank:
+        out.append(f"❓ <b>Місто клієнта не вказано в 1С: {len(blank)}</b>\nУ рейс такі не потрапляють — перевір, чи їх не треба було везти.\n"
+                   + block([(x["no"], x["name"], x["manager"], "") for x in blank]))
+    return "\n\n".join(out)
 
 
 # ---------- перевірка на історії (запускається на сервері руками) ----------

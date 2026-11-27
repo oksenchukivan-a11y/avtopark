@@ -233,6 +233,17 @@ def test_urgent_orders_arrive_while_the_run_is_open():
             add_invoice(f, "i14", "c6", "2026-11-25T16:10:00", 77)                  # виписали, коли рейс уже закінчувався
             text = await tail.left_behind(run, now=dt.datetime(2026, 11, 25, 17, 0))
             assert "не поїхала: 2" in text and "Салон Два" in text and "Салон Шість" in text and "Тестова Олена" in text
+            assert "Місто клієнта не вказано" not in text
+            # клієнт без міста в картці: у рейс не беремо, але власник бачить його окремим рядком
+            f.data["Catalog_Контрагенты"].append({"Ref_Key": "c7", "Description": "Салон Без Міста", "ДополнительноеОписание": ""})
+            f.data["Catalog_Контрагенты"].append({"Ref_Key": "c8", "Description": "Свій Магазин №3", "ДополнительноеОписание": " "})
+            add_invoice(f, "i15", "c7", "2026-11-25T11:00:00", 55)                  # ще до друку путівки, у жодній не була
+            add_invoice(f, "i16", "c8", "2026-11-25T11:05:00", 66)                  # свій магазин без міста — мовчимо
+            text = await tail.left_behind(run, now=dt.datetime(2026, 11, 25, 17, 0))
+            assert "не поїхала: 2" in text and "Місто клієнта не вказано в 1С: 1" in text
+            assert "Салон Без Міста" in text.split("❓")[1] and "Свій Магазин" not in text
+            assert all("Без Міста" not in st["name"] for st in store.get(run_id)["stops"])
+            f.data[REAL] = [d for d in f.data[REAL] if d["Ref_Key"] not in ("i15", "i16")]
             for s in run["stops"]:
                 if s["name"] == "Салон Два":
                     s["status"]["kind"] = "paid"
