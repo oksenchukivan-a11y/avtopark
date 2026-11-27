@@ -964,6 +964,7 @@ def test_manager_is_told_which_clients_have_no_phone():
 # ---------- звіт за день у рейсі (рішення власника 27.11) ----------
 
 CARS = {"AA1111AA": "Бус 1", "BB2222BB": "Бус 2"}
+MODE = ["written"]            # що відповідає бот на запис у старий звіт
 
 
 async def mark_all(app, who):
@@ -984,7 +985,7 @@ def test_day_report_is_filled_at_cash_handover_and_split_for_crew():
             sent_rows, photos = [], []
             daily.VEHICLES = dict(CARS)
             daily.KM_FOR = lambda codes, day: (87, {c: {"km": 87, "src": "gps"} for c in codes})
-            daily.TO_REPORTS = sent_rows.append
+            daily.TO_REPORTS = lambda row: sent_rows.append(row) or MODE[0]
             daily.ON_PHOTO = lambda bot, uid, fid, car, desc: photos.append((uid, fid, car, desc))
             try:
                 store.set_name(333, "Перший")
@@ -1055,7 +1056,15 @@ def test_day_report_is_filled_at_cash_handover_and_split_for_crew():
                 assert len(sent_rows) == 1 and (sent_rows[0]["tg_id"], sent_rows[0]["boxes"], sent_rows[0]["share"],
                                                 sent_rows[0]["vehicle"], sent_rows[0]["boxes_received"]) == \
                     (333, 12, 1.0, "BB2222BB,AA1111AA", 0)
-                assert [r["sent"] for r in daily.rows(run_id=2)] == [1]
+                assert [(r["sent"], r["sent_mode"]) for r in daily.rows(run_id=2)] == [(1, "written")]
+                for mode, want in (("checked", (1, "checked")), (None, (0, None))):   # водій заповнив сам / бот не прийняв
+                    MODE[0] = mode
+                    with store.db() as c:
+                        c.execute("UPDATE reys_daily SET sent=0, sent_mode=NULL WHERE run_id=2")
+                    await daily.enrich(2, {"stops": [], "vehicles": [], "day": ""})
+                    assert [(r["sent"], r["sent_mode"]) for r in daily.rows(run_id=2)] == [want]
+                MODE[0] = "written"
+                sent_rows[1:] = []
                 await app.call("start", id="demo")                                                     # власник пробує сам
                 await app.call("vehicle", codes=["AA1111AA"])
                 await mark_all(app, ME)

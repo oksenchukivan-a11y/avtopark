@@ -461,7 +461,7 @@ async def scenario_daily(seed=11):
     sent = []
     keep = (dict(daily.VEHICLES), daily.TO_REPORTS, os.environ.get("REYS_TO_REPORTS"))
     daily.VEHICLES = {"AA1111AA": "Бус 1", "BB2222BB": "Бус 2"}
-    daily.TO_REPORTS = sent.append
+    daily.TO_REPORTS = lambda row: sent.append(row) or "written"
     os.environ["REYS_TO_REPORTS"] = "1"
     try:
         await fresh()

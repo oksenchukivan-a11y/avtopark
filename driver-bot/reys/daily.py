@@ -24,7 +24,7 @@ REAL = "Document_РеализацияТоваровУслуг"
 FIELDS = ("run_id", "tg_id", "day", "sheet_ref", "route", "vehicle", "boxes", "points", "pieces", "boxes_received",
           "boxes_sent", "vehicle_ok", "damage_vehicle", "damage_desc", "damage_photo", "hours_fact", "km", "km_detail",
           "share", "km_owner", "full_boxes", "full_points", "full_pieces", "started_at", "closed_at", "test", "src",
-          "sent", "ts")
+          "sent", "sent_mode", "ts")
 
 
 def enabled() -> bool:
@@ -40,10 +40,12 @@ def init():
             vehicle_ok INTEGER, damage_vehicle TEXT, damage_desc TEXT, damage_photo TEXT,
             hours_fact REAL, km REAL, km_detail TEXT, share REAL, km_owner INTEGER,
             full_boxes REAL, full_points REAL, full_pieces REAL, started_at TEXT, closed_at TEXT,
-            test INTEGER DEFAULT 0, src TEXT DEFAULT 'reys', sent INTEGER DEFAULT 0, ts TEXT,
+            test INTEGER DEFAULT 0, src TEXT DEFAULT 'reys', sent INTEGER DEFAULT 0, sent_mode TEXT, ts TEXT,
             UNIQUE(run_id, tg_id));
         CREATE TABLE IF NOT EXISTS reys_photo_wait(tg_id INTEGER PRIMARY KEY, run_id INTEGER, ts TEXT);
         """)
+        if "sent_mode" not in {r["name"] for r in c.execute("PRAGMA table_info(reys_daily)")}:
+            c.execute("ALTER TABLE reys_daily ADD COLUMN sent_mode TEXT")
 
 
 def vehicles_view():
@@ -137,7 +139,7 @@ def write(run_id, run, team, test):
             vehicle_ok=1 if d["ok"] else 0, damage_vehicle=d["damage_vehicle"], damage_desc=d["damage_desc"],
             damage_photo=None, hours_fact=hours, km=None, km_detail=None, share=share, km_owner=1 if n == 0 else 0,
             full_boxes=d["boxes"], full_points=points, full_pieces=None, started_at=started, closed_at=closed,
-            test=1 if test else 0, src="reys", sent=0, ts=store.now()))
+            test=1 if test else 0, src="reys", sent=0, sent_mode=None, ts=store.now()))
     with store.db() as c:
         c.executemany(f"INSERT OR REPLACE INTO reys_daily({', '.join(FIELDS)}) VALUES({', '.join('?' * len(FIELDS))})",
                       [tuple(r[f] for f in FIELDS) for r in rows])
@@ -200,9 +202,15 @@ async def enrich(run_id, run):
             if r["test"] or r["sent"]:
                 continue                                           # навчальні й пробні рейси в зарплату не йдуть ніколи
             try:
-                await _call(TO_REPORTS, dict(r))
-                with store.db() as c:
-                    c.execute("UPDATE reys_daily SET sent=1 WHERE run_id=? AND tg_id=?", (run_id, r["tg_id"]))
+                # бот відповідає: 'written' — записав у старий звіт; 'checked' — водій уже заповнив його сам, лише звірено;
+                # нічого — не надіслано, рядок лишається з sent=0
+                how = await _call(TO_REPORTS, dict(r))
+                if how:
+                    with store.db() as c:
+                        c.execute("UPDATE reys_daily SET sent=1, sent_mode=? WHERE run_id=? AND tg_id=?",
+                                  (str(how)[:20], run_id, r["tg_id"]))
+                else:
+                    log.warning("reys: старий звіт рядок не прийняв (рейс %s, водій %s)", run_id, r["tg_id"])
             except Exception:
                 log.exception("reys: рядок звіту за день не записано (рейс %s, водій %s)", run_id, r["tg_id"])
 
